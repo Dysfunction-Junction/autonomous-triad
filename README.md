@@ -20,7 +20,7 @@ flowchart TD
     AC -- "P1 Claude Code (Claude Pro)" --> C["Claude"]
     AC -. "P2 failover" .-> CX["OpenAI Codex (ChatGPT Plus)"]
     AC -. "P3 failover" .-> N["Nous Portal (free tier)"]
-    AC -. "P4 failover" .-> O["Ollama qwen2.5-coder:14b"]
+    AC -. "P4 failover" .-> O["Ollama qwen3:1.7b"]
     CB["Circuit Breaker (circuit.py)"] -. "skips advisors in cooldown" .-> AC
 
     A <--> H["Hermes Agent"] <--> Relay["Android Bridge Relay :8766"] <--> Phone["Phone"]
@@ -33,7 +33,7 @@ flowchart TD
 - **Claude Code (`claude`)** – Claude Pro flat-rate subscription.
 - **OpenAI Codex (`codex`)** – ChatGPT Plus OAuth, no API metering.
 - **Nous Research (`triad/nous_bridge.py`)** – Hermes Portal free-tier models (`stepfun/step-3.7-flash:free`, failover `upstage/solar-pro4:free`).
-- **Ollama** – local `qwen2.5-coder:14b`, offline and free.
+- **Ollama** – local `qwen3:1.7b` (CPU-friendly; run with `--think=false`), offline and free.
 
 ---
 
