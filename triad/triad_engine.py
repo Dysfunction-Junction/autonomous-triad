@@ -24,6 +24,7 @@ import hashlib
 import ast
 import contextlib
 from functools import lru_cache
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any, Union, Set
 
@@ -131,22 +132,45 @@ def get_git_diff(cached: bool = False, head: bool = False, env: Optional[Dict[st
         raise RuntimeError(f"git diff failed (exit code {res.returncode}): {res.stderr.strip() or res.stdout.strip()}")
     return res.stdout.strip()
 
+CODEX_MAX_REFRESH_AGE = timedelta(days=30)
+
+
 def _decode_codex_auth(auth_path: Path) -> Dict[str, Any]:
     """
     Inspect the Codex OAuth cache without touching the network. Returns plan metadata
-    and a computed ``status`` of ``active`` / ``expired`` / ``unknown`` / ``missing``.
+    and a computed ``status`` of ``active`` / ``refreshable`` / ``expired`` / ``unknown`` / ``missing``.
     """
-    info: Dict[str, Any] = {"status": "missing", "plan": None, "active_until": None}
+    info: Dict[str, Any] = {"status": "missing", "plan": None, "active_until": None, "refreshable": False, "has_refresh_token": False}
     if not auth_path.exists():
         return info
     try:
         import base64
-        from datetime import datetime, timezone
         with open(auth_path, "r", encoding="utf-8") as f:
             auth_data = json.load(f)
-        id_token = (auth_data.get("tokens") or {}).get("id_token", "")
+        raw_tokens = auth_data.get("tokens")
+        tokens = raw_tokens if isinstance(raw_tokens, dict) else {}
+        has_refresh = bool(tokens.get("refresh_token"))
+        info["has_refresh_token"] = has_refresh
+
+        # Bound optimism: verify if last_refresh is valid ISO date within 30 days
+        is_refresh_valid = False
+        last_refresh_raw = auth_data.get("last_refresh")
+        if has_refresh and last_refresh_raw:
+            try:
+                lr_str = str(last_refresh_raw).replace("Z", "+00:00")
+                lr_dt = datetime.fromisoformat(lr_str)
+                if lr_dt.tzinfo is None:
+                    lr_dt = lr_dt.replace(tzinfo=timezone.utc)
+                delta = datetime.now(timezone.utc) - lr_dt
+                if -timedelta(minutes=5) <= delta <= CODEX_MAX_REFRESH_AGE:
+                    is_refresh_valid = True
+            except Exception:
+                is_refresh_valid = False
+        info["refreshable"] = is_refresh_valid
+
+        id_token = tokens.get("id_token", "")
         info["status"] = "unknown"
-        parts = id_token.split(".") if id_token else []
+        parts = id_token.split(".") if isinstance(id_token, str) else []
         if len(parts) >= 2:
             padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
             payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace"))
@@ -159,9 +183,18 @@ def _decode_codex_auth(auth_path: Path) -> Dict[str, Any]:
                     until_dt = datetime.fromisoformat(str(until_raw).replace("Z", "+00:00"))
                     if until_dt.tzinfo is None:
                         until_dt = until_dt.replace(tzinfo=timezone.utc)
-                    info["status"] = "active" if until_dt >= datetime.now(timezone.utc) else "expired"
+                    if until_dt >= datetime.now(timezone.utc):
+                        info["status"] = "active"
+                    elif is_refresh_valid:
+                        info["status"] = "refreshable"
+                    else:
+                        info["status"] = "expired"
                 except ValueError:
-                    info["status"] = "unknown"
+                    info["status"] = "refreshable" if is_refresh_valid else "unknown"
+            elif is_refresh_valid:
+                info["status"] = "refreshable"
+        elif is_refresh_valid:
+            info["status"] = "refreshable"
     except Exception as e:
         info["status"] = "unknown"
         info["error"] = str(e)
@@ -353,10 +386,14 @@ def _render_doctor_report(report: Dict[str, Any]) -> None:
     else:
         plan = (x.get("plan") or "plus").capitalize()
         until = x.get("active_until") or "unknown"
-        print(f"    - Plan:         ChatGPT {plan} (active until {until})")
+        if x["status"] == "refreshable":
+            print(f"    - Plan:         ChatGPT {plan} (subscription claim lapsed {until})")
+        else:
+            print(f"    - Plan:         ChatGPT {plan} (active until {until})")
         print("    - Mode:         chatgpt OAuth via WebSockets")
         print("    - Billing:      $0 extra (Included in ChatGPT subscription)")
-        print(f"    - Status:       {x['status'].upper()} | advisors.json enabled={x['enabled']}")
+        status_label = "REFRESH TOKEN PRESENT (unverified session)" if x["status"] == "refreshable" else x["status"].upper()
+        print(f"    - Status:       {status_label} | advisors.json enabled={x['enabled']}")
 
     h = report["hermes"]
     print("\n[4] Hermes Agent & Nous Research (Device Specialist & Advisory Member)")

@@ -175,12 +175,31 @@ MINIFIED_EXTENSIONS = frozenset({
     ".map",
 })
 
+KEY_MATERIAL_NAMES = frozenset({
+    "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", ".env", "credentials.json",
+})
+
+KEY_MATERIAL_EXTENSIONS = frozenset({
+    ".keystore", ".jks", ".p12", ".pfx", ".pem", ".key", ".pkcs12", ".gpg",
+})
+
+
+def _extract_diff_file_path(lines: List[str]) -> str:
+    """Robustly extract file path preferring +++ b/ over --- a/ (supports spaces & quotes)."""
+    window = lines[:10]
+    for prefix, strip_n in (("+++ b/", 6), ("+++ ", 4), ("--- a/", 6), ("--- ", 4)):
+        for line in window:
+            if line.startswith(prefix) and line not in ("+++ /dev/null", "--- /dev/null"):
+                return line[strip_n:].strip().strip("\"'")
+    return _path_from_diff_git_header(lines[0][:2048] if lines else "")
+
 BINARY_ASSET_EXTENSIONS = frozenset({
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svg", ".bmp", ".tiff",
     ".pdf", ".woff", ".woff2", ".ttf", ".eot", ".otf",
     ".mp3", ".mp4", ".wav", ".ogg", ".webm",
     ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".whl", ".jar",
     ".iso", ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".apk", ".aab", ".dex", ".class", ".pyc", ".pyo",
 })
 
 DOC_EXTENSIONS = frozenset({
@@ -209,7 +228,7 @@ CODE_OR_CONFIG_EXTENSIONS = frozenset({
     ".html", ".css", ".scss", ".less", ".sql", ".graphql", ".proto",
 })
 
-_MARKER_RE = re.compile(r"(?m)^\[(?:Diff omitted: |\.\.\. \d+ lines truncated)")
+_TRUNC_MARKER_RE = re.compile(r"^\[\.\.\. (\d+) lines? truncated to protect LLM context \.\.\.\]\r?$")
 
 
 def is_doc_or_asset_file(path_str: str) -> bool:
@@ -283,102 +302,170 @@ def _path_from_diff_git_header(first_line: str) -> str:
     return new or old
 
 
-def strip_diff_bloat(diff_text: Optional[str], max_lines_per_file: int = 500) -> str:
+def strip_diff_bloat(
+    diff_text: Optional[str],
+    max_lines_per_file: int = 500,
+    max_total_lines: int = 2500,
+) -> str:
     """
     Sanitize git diff text before passing to LLM advisors.
 
     Strips massive lockfiles, minified bundles, and binary assets while
     preserving the diff headers (so the LLM is aware which files changed).
     Truncates abnormally large single-file diffs to protect context limits.
+    Enforces a global line budget across all files to guard against multi-file bloat.
     Guaranteed strictly idempotent across single and multi-file diffs.
     """
     if not diff_text or not diff_text.strip():
         return ""
 
-    file_chunks = re.split(r"(?m)(?=^diff --git )", diff_text)
+    file_chunks = re.split(r"(?m)(?=^diff --git |^\[Diff omitted: \d+ remaining files)", diff_text)
     sanitized_chunks = []
+    total_retained_lines = 0
 
-    for chunk in file_chunks:
+    for idx, chunk in enumerate(file_chunks):
         chunk_clean = chunk.rstrip("\n")
         if not chunk_clean.strip():
             continue
 
-        # If this chunk already contains an anchored Triad sanitization marker line, preserve it (idempotency)
-        if _MARKER_RE.search(chunk_clean):
+        # If this chunk was already omitted by a previous pass, preserve it as-is
+        if re.search(r"(?m)^\[Diff omitted: ", chunk_clean):
             sanitized_chunks.append(chunk_clean)
+            total_retained_lines += len(chunk_clean.split("\n"))
             continue
 
-        lines = chunk_clean.splitlines()
-        first_line = lines[0][:2048] if lines else ""  # bound input to the header regexes below
-
-        # Robustly extract file path preferring +++ b/ or --- a/ over diff --git (supports spaces & quotes)
-        file_path = ""
-        for line in lines[:10]:
-            if line.startswith("+++ b/"):
-                file_path = line[6:].strip().strip("\"'")
-                break
-            elif line.startswith("+++ ") and line != "+++ /dev/null":
-                file_path = line[4:].strip().strip("\"'")
-                break
-            elif line.startswith("--- a/") and not file_path:
-                file_path = line[6:].strip().strip("\"'")
-            elif line.startswith("--- ") and line != "--- /dev/null" and not file_path:
-                file_path = line[4:].strip().strip("\"'")
-
-        if not file_path:
-            file_path = _path_from_diff_git_header(first_line)
-
+        lines = chunk_clean.split("\n")
+        file_path = _extract_diff_file_path(lines)
         clean_path = file_path.strip().strip("\"'")
         file_name = os.path.basename(clean_path).lower()
 
-        is_lockfile = file_name in LOCKFILE_NAMES
+        is_tsbuildinfo = file_name.endswith(".tsbuildinfo")
+        is_lockfile = (file_name in LOCKFILE_NAMES) or file_name.endswith(".lockfile") or is_tsbuildinfo
         is_minified = any(file_name.endswith(m_ext) for m_ext in MINIFIED_EXTENSIONS)
         is_git_binary = bool(
             re.search(r"(?m)^Binary files .* differ$", chunk_clean)
             or re.search(r"(?m)^GIT binary patch", chunk_clean)
         )
+        is_key_material = (
+            file_name in KEY_MATERIAL_NAMES
+            or any(file_name.endswith(k_ext) for k_ext in KEY_MATERIAL_EXTENSIONS)
+        )
         is_binary = any(file_name.endswith(b_ext) for b_ext in BINARY_ASSET_EXTENSIONS) or is_git_binary
 
-        if is_lockfile or is_minified or is_binary:
-            category = "lockfile update" if is_lockfile else ("binary / asset file" if is_binary else "minified / generated asset")
+        # 1. Specialized classification runs BEFORE the exhausted global budget check
+        if is_lockfile or is_minified or is_binary or is_key_material:
+            if is_key_material:
+                category = "key/certificate or credential file (content withheld)"
+            elif is_tsbuildinfo:
+                category = "generated build cache"
+            elif is_lockfile:
+                category = "lockfile update"
+            elif is_binary:
+                category = "binary / asset file"
+            else:
+                category = "minified / generated asset"
 
             header_lines = []
-            hunk_line_count = 0
             in_header = True
-            for line in lines:
+            for line in lines[:12]:
                 if in_header:
                     header_lines.append(line)
                     if line.startswith("+++ ") or line.startswith("Binary files ") or line.startswith("GIT binary patch"):
                         in_header = False
-                else:
-                    hunk_line_count += 1
+                        break
 
+            hunk_line_count = max(0, len(lines) - len(header_lines))
             if hunk_line_count > 0 or is_git_binary:
                 header_lines.append(f"[Diff omitted: {category} ({hunk_line_count} lines omitted to preserve LLM context)]")
                 sanitized_chunks.append("\n".join(header_lines).rstrip("\n"))
+                total_retained_lines += len(header_lines)
             else:
                 sanitized_chunks.append(chunk_clean)
+                total_retained_lines += len(lines)
             continue
 
+        # 2. Check if total global line budget has already been exhausted
+        if total_retained_lines >= max_total_lines:
+            rem_pairs = []
+            for rem in file_chunks[idx:]:
+                rem_clean = rem.rstrip("\n")
+                if not rem_clean.strip():
+                    continue
+                if re.search(r"(?m)^\[Diff omitted: ", rem_clean):
+                    sanitized_chunks.append(rem_clean)
+                    continue
+                rem_lines = rem_clean.split("\n")
+                p = _extract_diff_file_path(rem_lines)
+                if p:
+                    rem_pairs.append((p, rem_clean, rem_lines))
+                elif rem_clean.startswith("diff --git"):
+                    rem_pairs.append(("<unparsed>", rem_clean, rem_lines))
+
+            if rem_pairs:
+                if len(rem_pairs) == 1:
+                    single_p, single_chunk, single_lines = rem_pairs[0]
+                    hdr = []
+                    for line in single_lines[:12]:
+                        hdr.append(line)
+                        if line.startswith("+++ ") or line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+                            break
+                    hdr.append(f"[Diff omitted: remaining file changes truncated to protect LLM context ({len(single_lines)} lines omitted)]")
+                    sanitized_chunks.append("\n".join(hdr).rstrip("\n"))
+                else:
+                    omitted_paths = [p for p, _, _ in rem_pairs]
+                    total_omitted_lines = sum(len(sl) for _, _, sl in rem_pairs)
+                    path_summary = ", ".join(omitted_paths[:12])
+                    if len(omitted_paths) > 12:
+                        path_summary += f", and {len(omitted_paths) - 12} other files"
+                    sanitized_chunks.append(
+                        f"[Diff omitted: {len(omitted_paths)} remaining files ({total_omitted_lines} lines) truncated to protect LLM context: {path_summary}]"
+                    )
+            break
+
+        # 3. Process regular code diff with hunk extraction and idempotency defense
         header_lines = []
         hunk_lines = []
         in_header = True
+        prev_truncated = 0
         for line in lines:
             if in_header:
                 header_lines.append(line)
                 if line.startswith("+++ "):
                     in_header = False
             else:
+                # Discard previous truncation markers when re-sanitizing to guarantee strict idempotence,
+                # but preserve the truncated count so re-sanitizing doesn't lose track of omitted lines.
+                m = _TRUNC_MARKER_RE.match(line)
+                if m:
+                    prev_truncated += int(m.group(1))
+                    continue
                 hunk_lines.append(line)
 
-        if len(hunk_lines) > max_lines_per_file:
-            keep_count = max_lines_per_file
-            truncated_count = len(hunk_lines) - keep_count
-            kept_hunk = hunk_lines[:keep_count]
-            kept_hunk.append(f"[... {truncated_count} lines truncated to protect LLM context ...]")
-            sanitized_chunks.append("\n".join(header_lines + kept_hunk).rstrip("\n"))
+        # Calculate budget for this file
+        budget_remaining = max(0, max_total_lines - total_retained_lines - len(header_lines))
+        file_keep_limit = max(0, min(max_lines_per_file, budget_remaining))
+
+        if len(hunk_lines) > file_keep_limit:
+            new_truncated = len(hunk_lines) - file_keep_limit
+            total_truncated = new_truncated + prev_truncated
+            kept_hunk = hunk_lines[:file_keep_limit]
+            line_str = "line" if total_truncated == 1 else "lines"
+            kept_hunk.append(f"[... {total_truncated} {line_str} truncated to protect LLM context ...]")
+            emitted = header_lines + kept_hunk
+            sanitized_chunks.append("\n".join(emitted).rstrip("\n"))
+            total_retained_lines += len(emitted)
+        elif prev_truncated > 0:
+            # File was previously truncated and is still at or within budget
+            kept_hunk = list(hunk_lines)
+            line_str = "line" if prev_truncated == 1 else "lines"
+            kept_hunk.append(f"[... {prev_truncated} {line_str} truncated to protect LLM context ...]")
+            emitted = header_lines + kept_hunk
+            sanitized_chunks.append("\n".join(emitted).rstrip("\n"))
+            total_retained_lines += len(emitted)
         else:
+            # Unchanged file passes through verbatim to avoid newline/CRLF normalisation
             sanitized_chunks.append(chunk_clean)
+            total_retained_lines += len(lines)
 
     return "\n\n".join(sanitized_chunks)
 
@@ -391,6 +478,8 @@ __all__ = [
     "is_failed_advisor_response",
     "LOCKFILE_NAMES",
     "MINIFIED_EXTENSIONS",
+    "KEY_MATERIAL_NAMES",
+    "KEY_MATERIAL_EXTENSIONS",
     "BINARY_ASSET_EXTENSIONS",
     "DOC_EXTENSIONS",
     "ASSET_EXTENSIONS",

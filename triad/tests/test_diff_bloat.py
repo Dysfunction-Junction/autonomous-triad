@@ -188,6 +188,206 @@ class TestDiffBloatStripper(unittest.TestCase):
         self.assertEqual(once, twice)
         self.assertEqual(twice, thrice)
 
+    def test_strips_tsconfig_tsbuildinfo_and_gradle_lockfile(self):
+        diff_text = (
+            "diff --git a/tsconfig.tsbuildinfo b/tsconfig.tsbuildinfo\n"
+            "index 1111111..2222222 100644\n"
+            "--- a/tsconfig.tsbuildinfo\n"
+            "+++ b/tsconfig.tsbuildinfo\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+{\"program\": {\"fileInfos\": {}}}\n"
+            "diff --git a/gradle.lockfile b/gradle.lockfile\n"
+            "index 3333333..4444444 100644\n"
+            "--- a/gradle.lockfile\n"
+            "+++ b/gradle.lockfile\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+org.jetbrains.kotlin:kotlin-stdlib=1.9.0\n"
+        )
+        result = strip_diff_bloat(diff_text)
+        self.assertIn("[Diff omitted: generated build cache", result)
+        self.assertIn("[Diff omitted: lockfile update", result)
+        self.assertNotIn("{\"program\"", result)
+        self.assertNotIn("org.jetbrains.kotlin", result)
+
+    def test_strips_bytecode_and_keystore_assets(self):
+        diff_text = (
+            "diff --git a/release.keystore b/release.keystore\n"
+            "index 1111111..2222222 100644\n"
+            "--- a/release.keystore\n"
+            "+++ b/release.keystore\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+keystore-bytes\n"
+            "diff --git a/server.key b/server.key\n"
+            "index 5555555..6666666 100644\n"
+            "--- a/server.key\n"
+            "+++ b/server.key\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+private-key-material\n"
+            "diff --git a/cert.p12 b/cert.p12\n"
+            "index 7777777..8888888 100644\n"
+            "--- a/cert.p12\n"
+            "+++ b/cert.p12\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+pkcs12-bytes\n"
+            "diff --git a/app.apk b/app.apk\n"
+            "index 3333333..4444444 100644\n"
+            "--- a/app.apk\n"
+            "+++ b/app.apk\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+apk-bytes\n"
+        )
+        result = strip_diff_bloat(diff_text)
+        self.assertIn("[Diff omitted: key/certificate or credential file (content withheld)", result)
+        self.assertIn("[Diff omitted: binary / asset file", result)
+        self.assertNotIn("keystore-bytes", result)
+        self.assertNotIn("private-key-material", result)
+        self.assertNotIn("pkcs12-bytes", result)
+        self.assertNotIn("apk-bytes", result)
+
+    def test_renames_into_sensitive_asset_or_lockfile(self):
+        rename_diff = (
+            "diff --git a/notes.txt b/release.keystore\n"
+            "similarity index 100%\n"
+            "rename from notes.txt\n"
+            "rename to release.keystore\n"
+            "--- a/notes.txt\n"
+            "+++ b/release.keystore\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+keystore-bytes\n"
+            "diff --git a/old.json b/package-lock.json\n"
+            "--- a/old.json\n"
+            "+++ b/package-lock.json\n"
+            "@@ -1,1 +1,1 @@\n"
+            "+lockfile-bytes\n"
+        )
+        result = strip_diff_bloat(rename_diff)
+        self.assertIn("[Diff omitted: key/certificate or credential file (content withheld)", result)
+        self.assertIn("[Diff omitted: lockfile update", result)
+        self.assertNotIn("keystore-bytes", result)
+        self.assertNotIn("lockfile-bytes", result)
+
+    def test_enforces_multi_file_global_line_budget(self):
+        file1 = (
+            "diff --git a/file1.py b/file1.py\n"
+            "--- a/file1.py\n"
+            "+++ b/file1.py\n"
+            "@@ -1,1 +2,20 @@\n" +
+            "\n".join(f"+line1_{i} = {i}" for i in range(20))
+        )
+        file2 = (
+            "diff --git a/file2.py b/file2.py\n"
+            "--- a/file2.py\n"
+            "+++ b/file2.py\n"
+            "@@ -1,1 +2,20 @@\n" +
+            "\n".join(f"+line2_{i} = {i}" for i in range(20))
+        )
+        file3 = (
+            "diff --git a/file3.py b/file3.py\n"
+            "--- a/file3.py\n"
+            "+++ b/file3.py\n"
+            "@@ -1,1 +2,20 @@\n" +
+            "\n".join(f"+line3_{i} = {i}" for i in range(20))
+        )
+        combined = f"{file1}\n{file2}\n{file3}"
+        # Set max_total_lines=35, max_lines_per_file=20
+        # file1 gets 3 header lines + 20 hunk lines = 23 lines
+        # file2 gets 3 header lines + (35 - 23 - 3) = 9 hunk lines = 12 lines (total=35 lines)
+        # file3 gets truncated by global budget
+        result = strip_diff_bloat(combined, max_lines_per_file=20, max_total_lines=35)
+        self.assertIn("+line1_18 = 18", result)
+        self.assertIn("+line2_6 = 6", result)
+        self.assertNotIn("+line2_7 = 7", result)
+        self.assertIn("[... 13 lines truncated to protect LLM context ...]", result)
+        self.assertIn("diff --git a/file3.py b/file3.py", result)
+        self.assertIn("[Diff omitted: remaining file changes truncated to protect LLM context", result)
+        self.assertNotIn("+line3_0 = 0", result)
+
+    def test_multi_file_budget_strict_idempotency(self):
+        file1 = (
+            "diff --git a/file1.py b/file1.py\n"
+            "--- a/file1.py\n"
+            "+++ b/file1.py\n"
+            "@@ -1,1 +2,20 @@\n" +
+            "\n".join(f"+line1_{i} = {i}" for i in range(20))
+        )
+        file2 = (
+            "diff --git a/file2.py b/file2.py\n"
+            "--- a/file2.py\n"
+            "+++ b/file2.py\n"
+            "@@ -1,1 +2,20 @@\n" +
+            "\n".join(f"+line2_{i} = {i}" for i in range(20))
+        )
+        combined = f"{file1}\n{file2}"
+        once = strip_diff_bloat(combined, max_lines_per_file=20, max_total_lines=35)
+        twice = strip_diff_bloat(once, max_lines_per_file=20, max_total_lines=35)
+        thrice = strip_diff_bloat(twice, max_lines_per_file=20, max_total_lines=35)
+        self.assertEqual(once, twice)
+        self.assertEqual(twice, thrice)
+
+    def test_singular_line_truncation_idempotence(self):
+        # Test case where exactly 1 line is truncated
+        file_diff = (
+            "diff --git a/calc.py b/calc.py\n"
+            "--- a/calc.py\n"
+            "+++ b/calc.py\n"
+            "@@ -1,1 +1,4 @@\n"
+            "+line1\n"
+            "+line2\n"
+            "+line3\n"
+            "+line4\n"
+        )
+        # Hunk lines = 5 (@@ line + 4 code lines). Keep 4 -> exactly 1 line truncated!
+        once = strip_diff_bloat(file_diff, max_lines_per_file=4)
+        self.assertIn("[... 1 line truncated to protect LLM context ...]", once)
+        self.assertNotIn("[... 1 lines truncated", once)
+
+        # Second pass with a different limit
+        twice = strip_diff_bloat(once, max_lines_per_file=3)
+        self.assertIn("[... 2 lines truncated to protect LLM context ...]", twice)
+        self.assertNotIn("+line3", twice)
+
+    def test_many_files_tail_collapsed_into_single_marker(self):
+        # 10 small files exceeding global budget
+        files = []
+        for i in range(10):
+            files.append(
+                f"diff --git a/f{i}.py b/f{i}.py\n"
+                f"--- a/f{i}.py\n"
+                f"+++ b/f{i}.py\n"
+                f"@@ -1,1 +1,2 @@\n"
+                f"+print({i})\n"
+            )
+        combined = "\n".join(files)
+        # Budget only fits the first 2 files (each has 4 lines -> 8 lines total)
+        result = strip_diff_bloat(combined, max_total_lines=8)
+        self.assertIn("diff --git a/f0.py b/f0.py", result)
+        self.assertIn("diff --git a/f1.py b/f1.py", result)
+        self.assertIn("[Diff omitted: 8 remaining files", result)
+        self.assertNotIn("diff --git a/f9.py b/f9.py", result)
+
+        # Must be strictly idempotent
+        result2 = strip_diff_bloat(result, max_total_lines=8)
+        self.assertEqual(result, result2)
+
+    def test_edge_cases_zero_budget_and_negative_limits(self):
+        diff_text = (
+            "preamble not in git diff format\n"
+            "diff --git a/calc.py b/calc.py\n"
+            "--- a/calc.py\n"
+            "+++ b/calc.py\n"
+            "@@ -1,1 +1,2 @@\n"
+            "+val = 1\n"
+        )
+        # max_total_lines=0 should omit all files without crashing
+        zero_res = strip_diff_bloat(diff_text, max_total_lines=0)
+        self.assertIn("[Diff omitted:", zero_res)
+        self.assertNotIn("+val = 1", zero_res)
+
+        # negative max_lines_per_file should truncate all hunks without crashing
+        neg_res = strip_diff_bloat(diff_text, max_lines_per_file=-1)
+        self.assertIn("truncated to protect LLM context", neg_res)
+        self.assertNotIn("+val = 1", neg_res)
+
 
 class TestDocOrAssetClassification(unittest.TestCase):
     def test_recognizes_docs(self):

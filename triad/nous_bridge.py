@@ -12,6 +12,9 @@ calls, each up to `timeout` seconds — not sub-second.
 import sys
 import os
 import json
+import time
+import math
+import threading
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -37,14 +40,14 @@ INFERENCE_URL = "https://inference-api.nousresearch.com/v1/chat/completions"
 TASK_MODEL_CASCADES = {
     "coding": [
         "poolside/laguna-xs-2.1:free",      # Specialized code intelligence (1.8s ultra-fast)
-        "upstage/solar-pro4:free",           # High-precision logic & bug detection fallback
-        "stepfun/step-3.7-flash:free",       # Fast flash fallback
+        "stepfun/step-3.7-flash:free",       # Fast flash fallback (matches AGENTS.md standard)
+        "upstage/solar-pro4:free",           # Logic & reasoning fallback
         "poolside/laguna-s-2.1:free",        # Deep code model
     ],
     "architecture": [
         "upstage/solar-pro4:free",           # Flagship general reasoning & structural critique
-        "poolside/laguna-xs-2.1:free",       # Fast code architecture check
         "stepfun/step-3.7-flash:free",       # Flash reasoning fallback
+        "poolside/laguna-xs-2.1:free",       # Code architecture check
     ],
     "mobile": [
         "stepfun/step-3.7-flash:free",       # Ultra-responsive low-latency mobile tool actions
@@ -52,8 +55,8 @@ TASK_MODEL_CASCADES = {
         "poolside/laguna-xs-2.1:free",
     ],
     "general": [
-        "upstage/solar-pro4:free",           # Balanced general knowledge & advice
-        "stepfun/step-3.7-flash:free",
+        "stepfun/step-3.7-flash:free",       # Fast and reliable general knowledge & advice
+        "upstage/solar-pro4:free",           # Balanced general knowledge fallback
         "poolside/laguna-xs-2.1:free",
     ],
 }
@@ -98,6 +101,36 @@ def get_nous_token() -> Optional[str]:
     return None
 
 
+_MODEL_COOLDOWNS: dict = {}  # candidate_model -> monotonic_expiry
+_COOLDOWN_LOCK = threading.Lock()
+
+
+def is_model_on_cooldown(model_name: str) -> bool:
+    with _COOLDOWN_LOCK:
+        expiry = _MODEL_COOLDOWNS.get(model_name, 0.0)
+        return time.monotonic() < expiry
+
+
+def record_model_cooldown(model_name: str, seconds: float = 60.0) -> None:
+    with _COOLDOWN_LOCK:
+        _MODEL_COOLDOWNS[model_name] = time.monotonic() + seconds
+
+
+def clear_model_cooldowns() -> None:
+    with _COOLDOWN_LOCK:
+        _MODEL_COOLDOWNS.clear()
+
+
+def partition_by_cooldown(models: List[str]) -> Tuple[List[str], List[str]]:
+    """Atomically partition candidate models into (fresh, cooling) under lock."""
+    now = time.monotonic()
+    with _COOLDOWN_LOCK:
+        cool = {m for m in models if _MODEL_COOLDOWNS.get(m, 0.0) > now}
+    fresh = [m for m in models if m not in cool]
+    cooling = [m for m in models if m in cool]
+    return fresh, cooling
+
+
 def query_nous(
     prompt: str,
     model: Optional[str] = None,
@@ -112,8 +145,6 @@ def query_nous(
     callers (main()) use this to decide whether to signal a rate-limit verdict, instead
     of re-parsing the error string.
     """
-    import time
-
     token = get_nous_token()
     if not token:
         return False, "Error: No Nous credentials found (checked NOUS_API_KEY and Hermes auth.json)", "", False
@@ -123,14 +154,23 @@ def query_nous(
 
     # Determine candidate models to try
     models_to_try: List[str] = []
+    pinned: List[str] = []
     if model:
         models_to_try.append(model)
+        pinned.append(model)
     env_model = os.environ.get("NOUS_MODEL")
     if env_model and env_model not in models_to_try:
         models_to_try.append(env_model)
+        pinned.append(env_model)
     for m in cascade:
         if m not in models_to_try:
             models_to_try.append(m)
+
+    # Cooldown prioritization: attempt models not on cooldown first,
+    # but keep any explicitly requested model pinned at the front if provided
+    rest = [m for m in models_to_try if m not in pinned]
+    fresh, cooling = partition_by_cooldown(rest)
+    models_to_try = pinned + fresh + cooling
 
     last_error = ""
     attempted_count = 0
@@ -177,6 +217,8 @@ def query_nous(
                     finish_reason = choices[0].get("finish_reason")
                     content = ((choices[0].get("message") or {}).get("content") or "").strip()
                     if content and finish_reason != "length":
+                        with _COOLDOWN_LOCK:
+                            _MODEL_COOLDOWNS.pop(candidate_model, None)
                         return True, content, candidate_model, False
                     if content:
                         last_error = f"truncated response (finish_reason=length) from {candidate_model}"
@@ -196,6 +238,18 @@ def query_nous(
             last_error = f"HTTP {e.code}: {err_body or e.reason}"
             if e.code == 429:
                 rate_limited_count += 1
+                retry_after_hdr = e.headers.get("Retry-After") if (hasattr(e, "headers") and e.headers) else None
+                cooldown_secs = 60.0
+                if retry_after_hdr:
+                    try:
+                        val = float(retry_after_hdr)
+                        if math.isfinite(val):
+                            cooldown_secs = min(max(val, 1.0), 300.0)
+                    except (ValueError, TypeError):
+                        pass
+                record_model_cooldown(candidate_model, seconds=cooldown_secs)
+            elif e.code >= 500:
+                record_model_cooldown(candidate_model, seconds=30.0)
             elif e.code in (401, 403):
                 # Bad/expired token -- every model will fail identically, don't burn the cascade.
                 last_error = f"HTTP {e.code}: auth rejected ({err_body or e.reason})"
@@ -203,6 +257,11 @@ def query_nous(
                 return False, f"Nous auth failed: {last_error}", "", False
             # Log failover transition to next model in cascade
             print(f"[Nous Failover] Model {candidate_model} unavailable ({last_error}). Falling back to next free model in {task_category} cascade...", file=sys.stderr)
+            continue
+        except urllib.error.URLError as e:
+            last_error = f"network error: {e.reason}"
+            record_model_cooldown(candidate_model, seconds=15.0)
+            print(f"[Nous Failover] Model {candidate_model} network error ({last_error}). Falling back to next free model in {task_category} cascade...", file=sys.stderr)
             continue
         except Exception as e:
             last_error = str(e)

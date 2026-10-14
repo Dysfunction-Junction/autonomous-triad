@@ -20,6 +20,9 @@ class TestNousBridge(unittest.TestCase):
         self._env_patch = patch.dict(os.environ)
         self._env_patch.start()
         os.environ.pop("NOUS_MODEL", None)
+        import triad.nous_bridge as nb
+        nb.clear_model_cooldowns()
+        self.addCleanup(nb.clear_model_cooldowns)
         self.addCleanup(self._env_patch.stop)
 
     def test_get_nous_token_from_env(self):
@@ -182,6 +185,72 @@ class TestNousBridge(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(model, "poolside/laguna-xs-2.1:free")
         self.assertFalse(all_rate_limited)
+
+    @patch("triad.nous_bridge.urllib.request.urlopen")
+    @patch("triad.nous_bridge.get_nous_token", return_value="dummy_token")
+    def test_cooldown_reorders_failing_model(self, mock_get_token, mock_urlopen):
+        import triad.nous_bridge as nb
+        # Place lead coding model on cooldown
+        nb.record_model_cooldown("poolside/laguna-xs-2.1:free", seconds=60.0)
+        self.assertTrue(nb.is_model_on_cooldown("poolside/laguna-xs-2.1:free"))
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "fallback response"}}]
+        }).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        success, content, model, _ = query_nous("def calculate(): pass")
+        self.assertTrue(success)
+        # Should attempt the uncooled model (stepfun/step-3.7-flash:free) first
+        self.assertEqual(model, "stepfun/step-3.7-flash:free")
+
+    @patch("triad.nous_bridge.urllib.request.urlopen")
+    @patch("triad.nous_bridge.get_nous_token", return_value="dummy_token")
+    def test_pinned_model_preserved_despite_cooldown(self, mock_get_token, mock_urlopen):
+        import triad.nous_bridge as nb
+        # Explicit model pinned by caller should not be reordered behind cascade models
+        nb.record_model_cooldown("custom/model:free", seconds=60.0)
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "pinned response"}}]
+        }).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        success, content, model, _ = query_nous("test prompt", model="custom/model:free")
+        self.assertTrue(success)
+        self.assertEqual(model, "custom/model:free")
+        # And successful response clears the cooldown
+        self.assertFalse(nb.is_model_on_cooldown("custom/model:free"))
+
+    @patch("triad.nous_bridge.urllib.request.urlopen")
+    @patch("triad.nous_bridge.get_nous_token", return_value="dummy_token")
+    def test_429_sets_retry_after_cooldown(self, mock_get_token, mock_urlopen):
+        import triad.nous_bridge as nb
+        headers = MagicMock()
+        headers.get.return_value = "120"
+        err_429 = urllib.error.HTTPError(
+            url="https://inference-api.nousresearch.com/v1/chat/completions",
+            code=429,
+            msg="Rate limit",
+            hdrs=headers,
+            fp=io.BytesIO(b"Rate limit exceeded"),
+        )
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "ok from fallback"}}]
+        }).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.side_effect = [err_429, mock_resp]
+
+        success, content, model, _ = query_nous("def calculate(): pass")
+        self.assertTrue(success)
+        self.assertEqual(model, "stepfun/step-3.7-flash:free")
+        # Verify first model was placed on cooldown
+        self.assertTrue(nb.is_model_on_cooldown("poolside/laguna-xs-2.1:free"))
 
 
 if __name__ == "__main__":

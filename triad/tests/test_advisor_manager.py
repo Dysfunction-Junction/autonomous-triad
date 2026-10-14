@@ -10,6 +10,7 @@ Verifies:
 """
 
 import os
+import json
 import shutil
 import tempfile
 import unittest
@@ -240,6 +241,180 @@ class TestAdvisorManager(unittest.TestCase):
                     os.unlink(p)
                 except OSError:
                     pass
+
+
+class TestCodexAuthDecode(unittest.TestCase):
+    def test_missing_file_returns_missing(self):
+        from triad.triad_engine import _decode_codex_auth
+        info = _decode_codex_auth(Path("non_existent_auth_file_12345.json"))
+        self.assertEqual(info["status"], "missing")
+        self.assertFalse(info["refreshable"])
+
+    def test_active_unexpired_token(self):
+        from triad.triad_engine import _decode_codex_auth
+        import base64
+        from datetime import datetime, timezone, timedelta
+
+        future_iso = (datetime.now(timezone.utc) + timedelta(days=15)).isoformat()
+        payload = {
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "plus",
+                "chatgpt_subscription_active_until": future_iso,
+            }
+        }
+        b64_payload = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+        fake_jwt = f"header.{b64_payload}.sig"
+
+        data = {
+            "tokens": {"id_token": fake_jwt, "refresh_token": "valid_refresh"},
+            "last_refresh": datetime.now(timezone.utc).isoformat(),
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            t_path = Path(f.name)
+        try:
+            info = _decode_codex_auth(t_path)
+            self.assertEqual(info["status"], "active")
+            self.assertEqual(info["plan"], "plus")
+            self.assertTrue(info["refreshable"])
+        finally:
+            t_path.unlink(missing_ok=True)
+
+    def test_expired_token_with_valid_refresh_is_refreshable(self):
+        from triad.triad_engine import _decode_codex_auth
+        import base64
+        from datetime import datetime, timezone, timedelta
+
+        past_iso = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        payload = {
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "pro",
+                "chatgpt_subscription_active_until": past_iso,
+            }
+        }
+        b64_payload = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+        fake_jwt = f"header.{b64_payload}.sig"
+
+        data = {
+            "tokens": {"id_token": fake_jwt, "refresh_token": "valid_refresh"},
+            "last_refresh": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            t_path = Path(f.name)
+        try:
+            info = _decode_codex_auth(t_path)
+            self.assertEqual(info["status"], "refreshable")
+            self.assertEqual(info["plan"], "pro")
+            self.assertTrue(info["refreshable"])
+        finally:
+            t_path.unlink(missing_ok=True)
+
+    def test_stale_refresh_token_older_than_30_days_is_expired(self):
+        from triad.triad_engine import _decode_codex_auth
+        import base64
+        from datetime import datetime, timezone, timedelta
+
+        past_iso = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+        payload = {
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "plus",
+                "chatgpt_subscription_active_until": past_iso,
+            }
+        }
+        b64_payload = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+        fake_jwt = f"header.{b64_payload}.sig"
+
+        data = {
+            "tokens": {"id_token": fake_jwt, "refresh_token": "stale_refresh"},
+            "last_refresh": (datetime.now(timezone.utc) - timedelta(days=40)).isoformat(),
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            t_path = Path(f.name)
+        try:
+            info = _decode_codex_auth(t_path)
+            self.assertEqual(info["status"], "expired")
+            self.assertFalse(info["refreshable"])
+            self.assertTrue(info["has_refresh_token"])
+        finally:
+            t_path.unlink(missing_ok=True)
+
+    def test_refresh_token_at_boundary_edges_and_future_timestamp(self):
+        from triad.triad_engine import _decode_codex_auth
+        import base64
+        from datetime import datetime, timezone, timedelta
+
+        past_iso = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+        payload = {
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "plus",
+                "chatgpt_subscription_active_until": past_iso,
+            }
+        }
+        b64_payload = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+        fake_jwt = f"header.{b64_payload}.sig"
+
+        # Edge A: 29 days old -> valid refreshable
+        data_29d = {
+            "tokens": {"id_token": fake_jwt, "refresh_token": "valid_refresh"},
+            "last_refresh": (datetime.now(timezone.utc) - timedelta(days=29)).isoformat(),
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data_29d, f)
+            t_path = Path(f.name)
+        try:
+            info = _decode_codex_auth(t_path)
+            self.assertEqual(info["status"], "refreshable")
+            self.assertTrue(info["refreshable"])
+            self.assertTrue(info["has_refresh_token"])
+        finally:
+            t_path.unlink(missing_ok=True)
+
+        # Edge B: 31 days old -> expired
+        data_31d = {
+            "tokens": {"id_token": fake_jwt, "refresh_token": "valid_refresh"},
+            "last_refresh": (datetime.now(timezone.utc) - timedelta(days=31)).isoformat(),
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data_31d, f)
+            t_path = Path(f.name)
+        try:
+            info = _decode_codex_auth(t_path)
+            self.assertEqual(info["status"], "expired")
+            self.assertFalse(info["refreshable"])
+            self.assertTrue(info["has_refresh_token"])
+        finally:
+            t_path.unlink(missing_ok=True)
+
+        # Edge C: Future timestamp (> 5 minutes in future) -> rejected as invalid / expired
+        data_future = {
+            "tokens": {"id_token": fake_jwt, "refresh_token": "valid_refresh"},
+            "last_refresh": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(data_future, f)
+            t_path = Path(f.name)
+        try:
+            info = _decode_codex_auth(t_path)
+            self.assertEqual(info["status"], "expired")
+            self.assertFalse(info["refreshable"])
+            self.assertTrue(info["has_refresh_token"])
+        finally:
+            t_path.unlink(missing_ok=True)
+
+    def test_corrupt_json_returns_unknown(self):
+        from triad.triad_engine import _decode_codex_auth
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            f.write("{not valid json: true")
+            t_path = Path(f.name)
+        try:
+            info = _decode_codex_auth(t_path)
+            self.assertEqual(info["status"], "unknown")
+            self.assertFalse(info["refreshable"])
+        finally:
+            t_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
