@@ -2980,7 +2980,9 @@ def _build_python_multi_pattern_script(cwd: Path, py_test_target: str, patterns:
 IGNORED_SOURCE_DEPENDENCY_DIR_NAMES = {
     "node_modules", ".venv", "venv", "env", ".git", ".pytest_cache",
     "__pycache__", "build", "dist", ".next", ".turbo", ".tox",
-    ".cache", ".mypy_cache", ".ruff_cache"
+    ".cache", ".mypy_cache", ".ruff_cache", ".claude", ".cursor",
+    ".vscode", ".idea", ".vercel", ".hermes", "supabase", ".temp",
+    "android", "ios", "capacitor"
 }
 SOURCE_DEPENDENCY_EXTENSIONS = (
     ".py", ".ts", ".js", ".tsx", ".jsx", ".json", ".env",
