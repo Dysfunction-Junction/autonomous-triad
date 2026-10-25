@@ -119,6 +119,17 @@
       "enabled": true
     },
     {
+      "name": "oz",
+      "display_name": "Warp / Oz (Interactive Council Member)",
+      "role": "interactive",
+      "priority": 5,
+      "enabled": false,
+      "registration_date": "2026-10-23",
+      "dispatch_status": "pending_headless_transport",
+      "registration_note": "Council member for interactive architecture and review. Automatic subprocess dispatch is disabled: installed warp.cmd is TUI-only and no oz CLI is on PATH. Do not enable until a bounded noninteractive transport and $0 incremental-cost route are verified.",
+      "budget_policy": "Same owner token restrictions as other agents; targeted context, sanitized diffs, MCP stripping, existing cooldowns and shared two-live-advisor session cap. No metered fallback without owner approval."
+    },
+    {
       "name": "mock",
       "display_name": "Mock Test Advisor",
       "role": "test",
