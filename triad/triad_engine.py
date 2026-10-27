@@ -94,13 +94,13 @@ def query_codex(prompt: str, context: str = None, diff: str = None, mode: str = 
     """Query OpenAI Codex advisor via configured advisor manager."""
     return query_configured_advisor("codex", prompt, context=context, diff=diff, mode=mode, timeout=timeout, track_circuit=track_circuit)
 
-def query_advisory_council(prompt: str, context: str = None, diff: str = None, mode: str = "general", engine: str = "auto", timeout: int = 180, track_circuit: bool = True) -> str:
+def query_advisory_council(prompt: str, context: str = None, diff: str = None, mode: str = "general", engine: str = "auto", timeout: int = 180, track_circuit: bool = True, *, task: Optional[str] = None) -> str:
     """
     Autonomous Advisory Council with zero-downtime failover and dynamic advisor routing:
     Delegates to configured advisors via advisor_manager.
     """
     target = "claude" if engine == "bare_single" else engine
-    return query_configured_advisor(target, prompt, context=context, diff=diff, mode=mode, timeout=timeout, track_circuit=track_circuit)
+    return query_configured_advisor(target, prompt, context=context, diff=diff, mode=mode, task=task, timeout=timeout, track_circuit=track_circuit)
 
 def get_git_diff(cached: bool = False, head: bool = False, env: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None, binary: bool = False) -> str:
     """
@@ -568,8 +568,11 @@ def cmd_review(args, env: Optional[Dict[str, str]] = None):
             print("\n⚠️ [Competition Mode Warning] Review ran in degraded mode (quorum not met; single-advisor fallback)", file=sys.stderr)
         return
 
-    print(f"[Triad] Reviewing {len(diff_content.splitlines())} diff lines via Advisory Council (engine={engine})...\n")
-    resp = query_advisory_council(prompt, diff=diff_content, mode="review_diff", engine=engine)
+    task = getattr(args, "task", "auto")
+    if task == "auto":
+        task = "coding"
+    print(f"[Triad] Reviewing {len(diff_content.splitlines())} diff lines via Advisory Council (task={task}, engine={engine})...\n")
+    resp = query_advisory_council(prompt, diff=diff_content, mode="review_diff", engine=engine, task=task)
     print(resp)
 
 def cmd_consult(args):
@@ -603,8 +606,12 @@ def cmd_consult(args):
             _handle_adversarial_session_result(session)
         return
 
-    print(f"[Triad] Consulting Advisory Council (engine={engine})...\n")
-    resp = query_advisory_council(prompt, context=context, mode="architect", engine=engine)
+    task = getattr(args, "task", "auto")
+    if task == "auto":
+        task = "architecture"
+
+    print(f"[Triad] Consulting Advisory Council (task={task}, engine={engine})...\n")
+    resp = query_advisory_council(prompt, context=context, mode="architect", engine=engine, task=task)
     print(resp)
 
 def cmd_debug(args):
@@ -646,8 +653,12 @@ def cmd_debug(args):
             _handle_adversarial_session_result(session)
         return
 
-    print(f"[Triad] Diagnosing with Advisory Council (engine={engine})...\n")
-    resp = query_advisory_council(error, context=context, mode="debug", engine=engine)
+    task = getattr(args, "task", "auto")
+    if task == "auto":
+        task = "coding"
+
+    print(f"[Triad] Diagnosing with Advisory Council (task={task}, engine={engine})...\n")
+    resp = query_advisory_council(error, context=context, mode="debug", engine=engine, task=task)
     print(resp)
 
 def apply_patch_text(patch_text: str, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None, allow_3way: bool = False) -> bool:
@@ -5865,6 +5876,7 @@ def build_parser() -> argparse.ArgumentParser:
     # auto / intent / run
     p_auto = subparsers.add_parser("auto", aliases=["intent", "run"], help="Auto-classify intent and autonomously route across Triad subsystems")
     p_auto.add_argument("prompt", nargs="*", default=[], help="Natural language request, diff, or query")
+    p_auto.add_argument("--task", default="auto", choices=["auto", "architecture", "reasoning", "scraping", "browsing", "coding", "micro", "general"], help="Task profile override for efficiency-based model routing")
     p_auto.add_argument("--diff-file", default="", help="Path to diff file or - for stdin")
     p_auto.add_argument("--context", default="", help="Inline context or error snippet")
     p_auto.add_argument("--context-file", default="", help="Path to context file")
@@ -5891,6 +5903,7 @@ def build_parser() -> argparse.ArgumentParser:
     # review
     p_rev = subparsers.add_parser("review", help="Review a git diff with the Advisory Council")
     p_rev.add_argument("prompt", nargs="?", default="", help="Specific review instructions or feature intent")
+    p_rev.add_argument("--task", default="auto", choices=["auto", "architecture", "reasoning", "scraping", "browsing", "coding", "micro", "general"], help="Task profile override for efficiency-based model routing")
     p_rev.add_argument("--diff-file", default="", help="Path to diff file or - for stdin")
     p_rev.add_argument("--cached", "--staged", action="store_true", help="Review staged changes")
     p_rev.add_argument("--head", action="store_true", help="Review the most recent commit (HEAD~1..HEAD)")
@@ -5901,6 +5914,7 @@ def build_parser() -> argparse.ArgumentParser:
     # consult
     p_con = subparsers.add_parser("consult", help="Consult Advisory Council on architectural design")
     p_con.add_argument("prompt", nargs="?", default="", help="Architectural question or proposal")
+    p_con.add_argument("--task", default="auto", choices=["auto", "architecture", "reasoning", "scraping", "browsing", "coding", "micro", "general"], help="Task profile override for efficiency-based model routing")
     p_con.add_argument("--context", default="", help="Inline context or schema")
     p_con.add_argument("--context-file", default="", help="Path to context file")
     p_con.add_argument("--engine", default="auto", help="Advisor engine override (e.g. auto, claude, codex, ollama, mock)")
@@ -5910,6 +5924,7 @@ def build_parser() -> argparse.ArgumentParser:
     # debug
     p_dbg = subparsers.add_parser("debug", help="Diagnose a stubborn error or bug with Advisory Council")
     p_dbg.add_argument("error", nargs="?", default="", help="Error message or description")
+    p_dbg.add_argument("--task", default="auto", choices=["auto", "architecture", "reasoning", "scraping", "browsing", "coding", "micro", "general"], help="Task profile override for efficiency-based model routing")
     p_dbg.add_argument("--context", default="", help="Code snippet or context")
     p_dbg.add_argument("--context-file", default="", help="Path to context file")
     p_dbg.add_argument("--engine", default="auto", help="Advisor engine override (e.g. auto, claude, codex, ollama, mock)")

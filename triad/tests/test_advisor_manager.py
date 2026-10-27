@@ -24,6 +24,7 @@ from triad.advisor_manager import (
     add_advisor,
     save_config,
     expand_env_value,
+    rank_advisors_for_task,
 )
 
 
@@ -415,6 +416,39 @@ class TestCodexAuthDecode(unittest.TestCase):
             self.assertFalse(info["refreshable"])
         finally:
             t_path.unlink(missing_ok=True)
+
+    def test_rank_advisors_for_task(self):
+        sample_advisors = [
+            {"name": "claude", "priority": 10},
+            {"name": "codex", "priority": 20},
+            {"name": "antigravity", "priority": 30},
+            {"name": "nous", "priority": "40"},  # test string priority coercion
+            {"name": "ollama", "priority": None},  # test None priority fallback to 99
+            {"name": "custom_agent", "priority": 15},  # unknown name
+        ]
+
+        # Scraping: zero-token local / free-tier models must be ranked first
+        scraping_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "scraping")]
+        self.assertEqual(scraping_ranked[:3], ["ollama", "nous", "antigravity"])
+
+        # Architecture: deep frontier reasoning advisors must be ranked first (claude, antigravity, codex)
+        arch_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "architecture")]
+        self.assertEqual(arch_ranked[:3], ["claude", "antigravity", "codex"])
+
+        # Reasoning: codex ranked highest for algorithmic/proof tasks, followed by claude & antigravity
+        reasoning_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "reasoning")]
+        self.assertEqual(reasoning_ranked[:3], ["codex", "claude", "antigravity"])
+
+        # Browsing: local and lightweight fast models prioritized
+        browsing_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "browsing")]
+        self.assertEqual(browsing_ranked[:3], ["ollama", "nous", "antigravity"])
+
+        # General or None task: strictly preserves configured priority order with custom agent in position
+        general_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "general")]
+        self.assertEqual(general_ranked, ["claude", "custom_agent", "codex", "antigravity", "nous", "ollama"])
+
+        none_task_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, None)]
+        self.assertEqual(none_task_ranked, general_ranked)
 
 
 if __name__ == "__main__":

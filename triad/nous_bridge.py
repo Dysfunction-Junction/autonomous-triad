@@ -49,10 +49,29 @@ TASK_MODEL_CASCADES = {
         "stepfun/step-3.7-flash:free",       # Flash reasoning fallback
         "poolside/laguna-xs-2.1:free",       # Code architecture check
     ],
+    "reasoning": [
+        "upstage/solar-pro4:free",           # Deep reasoning & formal logic
+        "poolside/laguna-s-2.1:free",        # Advanced code reasoning
+        "stepfun/step-3.7-flash:free",       # Fast reasoning fallback
+    ],
+    "scraping": [
+        "stepfun/step-3.7-flash:free",       # High-throughput flash for parsing HTML/DOM/JSON ($0 cost)
+        "poolside/laguna-xs-2.1:free",       # Ultra-fast parser
+        "upstage/solar-pro4:free",           # Complex tabular fallback
+    ],
+    "browsing": [
+        "stepfun/step-3.7-flash:free",       # Low-latency path & filesystem search ($0 cost)
+        "poolside/laguna-xs-2.1:free",       # Fast tree extractor
+        "upstage/solar-pro4:free",
+    ],
     "mobile": [
         "stepfun/step-3.7-flash:free",       # Ultra-responsive low-latency mobile tool actions
         "upstage/solar-pro4:free",           # Reasoning fallback for complex phone tasks
         "poolside/laguna-xs-2.1:free",
+    ],
+    "micro": [
+        "poolside/laguna-xs-2.1:free",       # 1.8s instant response for commit msg/docstrings
+        "stepfun/step-3.7-flash:free",
     ],
     "general": [
         "stepfun/step-3.7-flash:free",       # Fast and reliable general knowledge & advice
@@ -62,21 +81,40 @@ TASK_MODEL_CASCADES = {
 }
 
 
-def detect_task_category(prompt: str, mode: Optional[str] = None) -> str:
+def detect_task_category(prompt: str, mode: Optional[str] = None, task: Optional[str] = None) -> str:
     """Classifies prompt into task category to select the optimal free model."""
+    env_task = os.environ.get("TRIAD_TASK", "").strip().lower()
+    candidate_task = (task or env_task).lower()
+    if candidate_task and candidate_task not in ("general", "auto") and candidate_task in TASK_MODEL_CASCADES:
+        return candidate_task
+
+    if mode in ("scraping", "scrape"):
+        return "scraping"
+    if mode in ("browsing", "browse"):
+        return "browsing"
+    if mode in ("reasoning", "logic"):
+        return "reasoning"
     if mode in ("review_diff", "debug"):
         return "coding"
     if mode in ("architect", "consult"):
         return "architecture"
+    if mode in ("micro",):
+        return "micro"
 
     p_lower = prompt.lower()
+    if any(k in p_lower for k in ("scrape", "scraping", "extract table", "parse html", "dom traversal", "html dump", "crawl", "soup")):
+        return "scraping"
+    if any(k in p_lower for k in ("browse", "file tree", "find file", "locate path", "directory tree", "where is file")):
+        return "browsing"
+    if any(k in p_lower for k in ("formal proof", "state machine", "deadlock", "race condition", "invariant proof", "recurrence")):
+        return "reasoning"
     if any(k in p_lower for k in ("diff --git", "traceback", "def ", "class ", "import ", "syntaxerror", "bug", "patch")):
         return "coding"
     if any(k in p_lower for k in ("architecture", "system design", "schema", "scalability", "tradeoff", "consensus")):
         return "architecture"
     if any(k in p_lower for k in ("phone", "android", "screen", "sms", "notification", "battery", "relay")):
         return "mobile"
-    return "general"
+    return candidate_task if candidate_task in TASK_MODEL_CASCADES else "general"
 
 
 def get_nous_token() -> Optional[str]:
@@ -137,6 +175,8 @@ def query_nous(
     mode: Optional[str] = None,
     timeout: int = 25,
     budget_seconds: float = 100.0,  # wall-clock ceiling, stays under advisor_manager's 120s subprocess timeout
+    *,
+    task: Optional[str] = None,
 ) -> Tuple[bool, str, str, bool]:
     """
     Query Nous Portal API with task-aware optimal model routing and automatic cascading failover.
@@ -149,7 +189,7 @@ def query_nous(
     if not token:
         return False, "Error: No Nous credentials found (checked NOUS_API_KEY and Hermes auth.json)", "", False
 
-    task_category = detect_task_category(prompt, mode=mode)
+    task_category = detect_task_category(prompt, mode=mode, task=task)
     cascade = TASK_MODEL_CASCADES.get(task_category, TASK_MODEL_CASCADES["general"])
 
     # Determine candidate models to try
@@ -285,6 +325,7 @@ def main():
     parser = argparse.ArgumentParser(description="Nous Research Portal Bridge")
     parser.add_argument("prompt", nargs="?", default="", help="Prompt text")
     parser.add_argument("--mode", default=None, help="Query mode (review_diff, debug, architect, etc.)")
+    parser.add_argument("--task", default=None, help="Task profile (architecture, reasoning, scraping, browsing, etc.)")
     parser.add_argument("--model", default=None, help="Explicit model override")
     args, unknown = parser.parse_known_args()
 
@@ -296,7 +337,7 @@ def main():
         print("Error: Empty prompt provided to nous_bridge", file=sys.stderr)
         sys.exit(1)
 
-    success, result, model_used, all_rate_limited = query_nous(prompt, model=args.model, mode=args.mode)
+    success, result, model_used, all_rate_limited = query_nous(prompt, model=args.model, mode=args.mode, task=args.task)
     if success:
         print(result)
         sys.exit(0)

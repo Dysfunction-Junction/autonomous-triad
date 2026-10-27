@@ -162,6 +162,50 @@ class TestIntentEngine(unittest.TestCase):
         res = classify_intent("run pre-commit verification and fix debugging issues")
         self.assertEqual(res.intent, "GATE")
 
+    def test_classify_scraping_task(self):
+        res = classify_intent("scrape table of buffet menu prices from html dump")
+        self.assertEqual(res.intent, "SCRAPE")
+        self.assertEqual(res.task_category, "scraping")
+        self.assertEqual(res.suggested_model_tier, "tier_0_or_flash")
+        self.assertIn("High token volume", res.efficiency_rationale)
+
+    def test_classify_browsing_task(self):
+        res = classify_intent("where is file life-graph.ts in the project tree")
+        self.assertEqual(res.intent, "BROWSE")
+        self.assertEqual(res.task_category, "browsing")
+        self.assertEqual(res.suggested_model_tier, "local_tools_or_slm")
+
+    def test_classify_reasoning_task(self):
+        res = classify_intent("formulate the formal proof and state machine logic for race conditions")
+        self.assertEqual(res.intent, "REASONING")
+        self.assertEqual(res.task_category, "reasoning")
+        self.assertTrue(res.high_stakes) # race condition
+        self.assertEqual(res.suggested_engine, "competition") # dual adjudication
+        self.assertEqual(res.suggested_model_tier, "tier_2_dual_competition")
+
+    def test_locate_workspace_paths(self):
+        import tempfile
+        from triad.intent_engine import locate_workspace_paths
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "src").mkdir()
+            (tmp_path / "src" / "life_graph.ts").write_text("// dummy", encoding="utf-8")
+            (tmp_path / "src" / "environment.py").write_text("# config", encoding="utf-8")
+            (tmp_path / "src" / "secret.env").write_text("SECRET=123", encoding="utf-8")
+
+            # Must locate the safe source file
+            matches = locate_workspace_paths("where is life_graph.ts in the project tree", root_dir=tmp_path)
+            self.assertTrue(any("life_graph.ts" in m for m in matches))
+
+            # Must locate environment.py without false-positive .env collision
+            env_py = locate_workspace_paths("environment py", root_dir=tmp_path)
+            self.assertTrue(any("environment.py" in m for m in env_py))
+
+            # Must filter out sensitive secret/env files
+            env_matches = locate_workspace_paths("secret env", root_dir=tmp_path)
+            self.assertEqual(env_matches, [])
+
 
 if __name__ == "__main__":
     unittest.main()

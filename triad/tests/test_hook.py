@@ -2068,7 +2068,7 @@ echo "SET_U_PASSED"
         )
 
         captured_diffs = []
-        def fake_query(prompt, diff=None, mode=None, engine=None):
+        def fake_query(prompt, diff=None, mode=None, engine=None, **kwargs):
             captured_diffs.append(diff)
             return "VERDICT: APPROVED"
 

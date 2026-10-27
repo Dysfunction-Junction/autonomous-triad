@@ -12,8 +12,9 @@ Zero-cost, ultra-fast intent classification and autonomous routing across:
 import sys
 import re
 import subprocess
+from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Iterable, Pattern
+from typing import Dict, Any, Optional, Iterable, Pattern, List, Tuple
 
 try:
     from triad.paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA
@@ -28,12 +29,15 @@ if hasattr(sys.stderr, "reconfigure"):
 
 @dataclass
 class IntentClassification:
-    intent: str               # GATE, REVIEW, DEBUG, ARCHITECT, DEVICE, MEMORY, DOCTOR, GENERAL
+    intent: str               # GATE, REVIEW, DEBUG, ARCHITECT, DEVICE, MEMORY, DOCTOR, GENERAL, SCRAPE, BROWSE, REASONING
     confidence: float         # 0.0 to 1.0
     reason: str               # Explanatory rationale for the classification
-    suggested_mode: str       # review_diff, architect, debug, gate, doctor, general
-    suggested_engine: str     # auto, competition, hermes, pieces, memory
+    suggested_mode: str       # review_diff, architect, debug, gate, doctor, general, scraping, browsing, reasoning
+    suggested_engine: str     # auto, competition, hermes, pieces, memory, ollama
     high_stakes: bool = False # Flagged if touching auth, security, crypto, migrations
+    task_category: str = "general" # architecture, reasoning, scraping, browsing, coding, micro, mobile, memory
+    suggested_model_tier: str = "tier_1_subscription" # tier_0_local, tier_0_or_flash, local_tools_or_slm, tier_1_subscription, tier_2_dual_competition
+    efficiency_rationale: str = "" # Rationale for efficiency and token routing decisions
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 # Regex Patterns for Deterministic Classification
@@ -96,7 +100,8 @@ DOCTOR_KEYWORDS = [
 ARCHITECT_KEYWORDS = [
     "should we use", "should i use", "compare", "tradeoffs of",
     "architecture", "architectural", "system design", "pattern recommendation",
-    "database schema", "scaling strategy", "evaluating approach", "pros and cons"
+    "database schema", "scaling strategy", "evaluating approach", "pros and cons",
+    "database migration", "schema migration", "api design", "design pattern", "component design"
 ]
 
 REVIEW_KEYWORDS = [
@@ -135,6 +140,29 @@ MESH_KEYWORDS = [
     "mesh tools", "swarm coordination"
 ]
 
+SCRAPE_KEYWORDS = [
+    "scrape", "scraping", "web scrape", "web scraping", "extract data",
+    "extract table", "parse html", "html parsing", "dom traversal",
+    "web extraction", "crawl", "crawler", "crawling", "html dump",
+    "extract prices", "parse json from", "scrape page", "scrape website",
+    "soup", "beautifulsoup", "cheerio", "html text", "parse dom"
+]
+
+BROWSE_KEYWORDS = [
+    "browse files", "browse directory", "file tree", "directory tree", "project tree",
+    "source tree", "repo tree", "codebase tree", "find file", "where is file",
+    "locate file", "locate path", "search files", "search codebase", "list files in",
+    "show files in", "list directory", "file structure", "folder structure",
+    "path browsing", "find imports", "repo structure", "find all files", "which folder"
+]
+
+REASONING_KEYWORDS = [
+    "formal proof", "state machine", "state transition logic",
+    "concurrency logic", "deadlock analysis", "race condition logic",
+    "algorithmic proof", "invariant proof", "formal verification",
+    "recurrence relation", "algorithmic complexity", "time complexity proof"
+]
+
 _GATE_RE = _compile_keywords(GATE_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
 _DEVICE_RE = _compile_keywords(DEVICE_KEYWORDS, strict_boundary=True)
 _MEMORY_RE = _compile_keywords(MEMORY_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
@@ -145,6 +173,9 @@ _DEBUG_RE = _compile_keywords(DEBUG_KEYWORDS, strict_boundary=False, suffixes=r"
 _HIGH_STAKES_RE = _compile_keywords(HIGH_STAKES_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
 _MICRO_RE = _compile_keywords(MICRO_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
 _MESH_RE = _compile_keywords(MESH_KEYWORDS, strict_boundary=True)
+_SCRAPE_RE = _compile_keywords(SCRAPE_KEYWORDS, strict_boundary=True, suffixes=r"(?:s|es|ed|ing)?")
+_BROWSE_RE = _compile_keywords(BROWSE_KEYWORDS, strict_boundary=True, suffixes=r"(?:s|es|ed|ing)?")
+_REASONING_RE = _compile_keywords(REASONING_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
 
 
 def is_high_stakes(text: str) -> bool:
@@ -161,6 +192,9 @@ _SCORE_WEIGHTS = {
     "DOCTOR": 5.5,
     "MEMORY": 5.0,
     "REVIEW": 4.5,
+    "REASONING": 4.2,
+    "SCRAPE": 3.8,
+    "BROWSE": 3.6,
     "MESH": 3.4,
     "ARCHITECT": 3.2,
     "DEVICE": 2.5,
@@ -175,6 +209,9 @@ _INTENT_CONFIDENCE = {
     "DOCTOR": 0.94,
     "DEBUG": 0.88,
     "ARCHITECT": 0.88,
+    "REASONING": 0.92,
+    "SCRAPE": 0.94,
+    "BROWSE": 0.93,
 }
 
 _INTENT_REASON = {
@@ -186,6 +223,9 @@ _INTENT_REASON = {
     "DOCTOR": "System health, platform audit, or doctor keywords detected",
     "DEBUG": "Runtime exception, compiler diagnostics, or debugging keywords detected",
     "ARCHITECT": "Architectural design inquiry or comparative decision dilemma detected",
+    "REASONING": "Deep algorithmic reasoning, formal logic, or complex state machine analysis detected",
+    "SCRAPE": "Data scraping, web extraction, or HTML/table parsing keywords detected",
+    "BROWSE": "File and path browsing, repository tree, or filesystem exploration keywords detected",
 }
 
 _INTENT_MODE = {
@@ -197,6 +237,9 @@ _INTENT_MODE = {
     "DOCTOR": "doctor",
     "DEBUG": "debug",
     "ARCHITECT": "architect",
+    "REASONING": "consult",
+    "SCRAPE": "scraping",
+    "BROWSE": "browsing",
     "GENERAL": "general",
 }
 
@@ -205,7 +248,163 @@ _INTENT_ENGINE = {
     "DEVICE": "hermes",
     "DOCTOR": "auto",
     "MESH": "mesh",
+    "SCRAPE": "auto",
+    "BROWSE": "auto",
 }
+
+
+def resolve_efficiency_profile(intent: str, high_stakes: bool = False) -> Tuple[str, str, str]:
+    """
+    Resolves (task_category, suggested_model_tier, efficiency_rationale)
+    based on task characteristics and token efficiency invariants.
+    """
+    if intent in ("ARCHITECT",):
+        tier = "tier_2_dual_competition" if high_stakes else "tier_1_subscription"
+        rationale = "System architecture and structural invariants routed to Claude 3.7 Sonnet / Codex for maximum reasoning depth."
+        return ("architecture", tier, rationale)
+
+    if intent in ("REASONING",):
+        tier = "tier_2_dual_competition" if high_stakes else "tier_1_subscription"
+        rationale = "Formal algorithmic logic, state machines, and concurrency proofs routed to OpenAI Codex (gpt-6-astra) / Claude 3.7."
+        return ("reasoning", tier, rationale)
+
+    if intent in ("SCRAPE",):
+        return (
+            "scraping",
+            "tier_0_or_flash",
+            "High token volume data extraction routed to Ollama / Nous Flash ($0 cost) to prevent consuming subscription rate limits."
+        )
+
+    if intent in ("BROWSE",):
+        return (
+            "browsing",
+            "local_tools_or_slm",
+            "Filesystem tree and path discovery executed locally via zero-token repository index."
+        )
+
+    if intent in ("REVIEW", "GATE", "DEBUG"):
+        tier = "tier_2_dual_competition" if high_stakes else "tier_1_subscription"
+        rationale = "Code diff critique and bug remediation routed to primary advisory council (Claude / Codex)."
+        return ("coding", tier, rationale)
+
+    if intent in ("MICRO",):
+        return (
+            "micro",
+            "tier_0_local",
+            "Low-complexity formatting/docstring task routed to Tier-0 local SLM to eliminate network latency and token usage."
+        )
+
+    if intent in ("DEVICE",):
+        return ("mobile", "hermes_relay", "Mobile device telemetry and Android phone tasks routed to Hermes bridge.")
+
+    if intent in ("MEMORY",):
+        return ("memory", "local_ltm", "Historical context recall routed to Mem0 and local PiecesOS store.")
+
+    if intent in ("DOCTOR",):
+        return ("doctor", "tier_0_local", "Platform health and subscription cost audit executed locally in <1ms.")
+
+    if intent in ("MESH",):
+        return ("mesh", "local_tools_or_slm", "Agent Mesh MCP swarm and peer channel coordination executed locally.")
+
+    tier = "tier_2_dual_competition" if high_stakes else "tier_1_subscription"
+    return ("general", tier, "General query routed to primary advisory council with zero-downtime failover.")
+
+
+def locate_workspace_paths(query: str, root_dir: Optional[Any] = None, max_results: int = 25) -> List[str]:
+    """
+    Fast, zero-token local workspace file locator for BROWSE intent.
+    Executes git ls-files or cached directory search in <5ms.
+    Strictly filters credential and secret files to prevent leaking sensitive paths.
+    """
+    root = Path(root_dir) if root_dir else Path.cwd()
+    # Extract candidate keywords from query, filtering out common locator and tree noise words
+    cleaned = re.sub(
+        r"\b(find|where|is|are|locate|show|list|search|files?|paths?|directories|folders?|in|the|all|at|for|to|project|tree|repo|repository|codebase|workspace|dir|structure)\b",
+        " ",
+        query,
+        flags=re.IGNORECASE,
+    ).strip()
+    terms = [t for t in re.split(r"[\s,\'\"]+", cleaned) if len(t) >= 2]
+    if not terms:
+        return []
+
+    def _is_safe(p: str) -> bool:
+        norm = "/" + p.replace("\\", "/").lower().lstrip("/")
+        base = norm.rsplit("/", 1)[-1]
+        # Match sensitive extensions, keys, credentials, and env files without over-matching environment.py
+        if base == ".env" or base.startswith((".env", "secrets.")) or base.endswith((".env", ".key", ".pem", ".keystore", ".jks", ".p12", ".pfx", ".kdbx")):
+            return False
+        if ".env." in base:
+            return False
+        if base in (".npmrc", ".netrc", ".pgpass", ".git-credentials", "id_rsa", "id_ed25519", "credentials.json"):
+            return False
+        if any(seg in norm for seg in ("/.ssh/", "/.aws/", "/secrets/", "/credentials/")):
+            return False
+        return True
+
+    file_like_terms = [t for t in terms if "." in t or "_" in t or "-" in t]
+
+    matches: List[str] = []
+    lines: List[str] = []
+
+    try:
+        cmd = ["git", "ls-files"]
+        res = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, timeout=2.0)
+        if res.returncode == 0:
+            lines = [l for l in res.stdout.splitlines() if _is_safe(l)]
+    except Exception:
+        pass
+
+    if not lines:
+        skip = {".git", "node_modules", "dist", "build", ".venv", "__pycache__", ".next", ".turbo"}
+        import os
+        for r, dirs, files in os.walk(str(root)):
+            dirs[:] = [d for d in dirs if d not in skip]
+            for f in files:
+                rel = os.path.relpath(os.path.join(r, f), str(root)).replace("\\", "/")
+                if _is_safe(rel):
+                    lines.append(rel)
+                if len(lines) >= 2000:
+                    break
+            if len(lines) >= 2000:
+                break
+
+    # Stage 1: All extracted terms match
+    for line in lines:
+        line_lower = line.lower()
+        if all(term.lower() in line_lower for term in terms):
+            matches.append(line)
+            if len(matches) >= max_results:
+                return matches
+
+    if matches:
+        return matches
+
+    # Stage 2: If specific file-like terms (e.g. "intent_engine.py") exist, match those
+    if file_like_terms:
+        for line in lines:
+            line_lower = line.lower()
+            if all(term.lower() in line_lower for term in file_like_terms):
+                matches.append(line)
+                if len(matches) >= max_results:
+                    return matches
+
+    if matches:
+        return matches
+
+    # Stage 3: Match any term on token boundaries, ranked by number of matched terms
+    def _line_tokens(l: str) -> set:
+        return set(re.split(r"[\s/\\._-]+", l.lower()))
+
+    scored = []
+    for line in lines:
+        tokens = _line_tokens(line)
+        score = sum(1 for term in terms if term.lower() in tokens or (len(term) >= 4 and any(t.startswith(term.lower()) for t in tokens)))
+        if score > 0:
+            scored.append((score, line))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [line for _, line in scored[:max_results]]
 
 
 def _council_engine(high_stakes: bool) -> str:
@@ -230,6 +429,7 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
     if has_diff:
         # If diff is paired with an explicit gate request, gate takes precedence
         if _GATE_RE.search(lowered_prompt):
+            cat, tier, rat = resolve_efficiency_profile("GATE", high_stakes=high_stakes)
             return IntentClassification(
                 intent="GATE",
                 confidence=0.98,
@@ -237,8 +437,12 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
                 suggested_mode="gate",
                 suggested_engine=_council_engine(high_stakes),
                 high_stakes=high_stakes,
+                task_category=cat,
+                suggested_model_tier=tier,
+                efficiency_rationale=rat,
                 metadata={"has_diff": True}
             )
+        cat, tier, rat = resolve_efficiency_profile("REVIEW", high_stakes=high_stakes)
         return IntentClassification(
             intent="REVIEW",
             confidence=0.97,
@@ -246,12 +450,16 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
             suggested_mode="review_diff",
             suggested_engine=_council_engine(high_stakes),
             high_stakes=high_stakes,
+            task_category=cat,
+            suggested_model_tier=tier,
+            efficiency_rationale=rat,
             metadata={"has_diff": True}
         )
 
     # 2. Stack traces are unambiguous - do not let "review this traceback" become REVIEW.
     has_stack_trace = any(p.search(combined_text) for p in STACK_TRACE_PATTERNS)
     if has_stack_trace:
+        cat, tier, rat = resolve_efficiency_profile("DEBUG", high_stakes=high_stakes)
         return IntentClassification(
             intent="DEBUG",
             confidence=0.96,
@@ -259,6 +467,9 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
             suggested_mode="debug",
             suggested_engine=_council_engine(high_stakes),
             high_stakes=high_stakes,
+            task_category=cat,
+            suggested_model_tier=tier,
+            efficiency_rationale=rat,
             metadata={"has_stack_trace": True}
         )
 
@@ -279,6 +490,12 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
             scores["REVIEW"] += 1.5
     if _ARCHITECT_RE.search(lowered_prompt):
         scores["ARCHITECT"] = _SCORE_WEIGHTS["ARCHITECT"]
+    if _REASONING_RE.search(lowered_prompt):
+        scores["REASONING"] = _SCORE_WEIGHTS["REASONING"]
+    if _SCRAPE_RE.search(lowered_prompt):
+        scores["SCRAPE"] = _SCORE_WEIGHTS["SCRAPE"]
+    if _BROWSE_RE.search(lowered_prompt):
+        scores["BROWSE"] = _SCORE_WEIGHTS["BROWSE"]
     if _DEVICE_RE.search(lowered_prompt):
         scores["DEVICE"] = _SCORE_WEIGHTS["DEVICE"]
     if _MESH_RE.search(lowered_prompt):
@@ -289,19 +506,24 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
         meta: Dict[str, Any] = {"scores": scores}
         if winner == "REVIEW":
             meta["needs_git_diff"] = True
+        cat, tier, rat = resolve_efficiency_profile(winner, high_stakes=high_stakes)
         return IntentClassification(
             intent=winner,
             confidence=_INTENT_CONFIDENCE.get(winner, 0.80),
             reason=_INTENT_REASON.get(winner, "Scored intent match"),
             suggested_mode=_INTENT_MODE.get(winner, "general"),
             suggested_engine=_INTENT_ENGINE.get(winner, _council_engine(high_stakes)),
-            high_stakes=high_stakes if winner not in ("MEMORY", "DEVICE", "DOCTOR", "MESH") else False,
+            high_stakes=high_stakes if winner not in ("MEMORY", "DEVICE", "DOCTOR", "MESH", "SCRAPE", "BROWSE") else False,
+            task_category=cat,
+            suggested_model_tier=tier,
+            efficiency_rationale=rat,
             metadata=meta,
         )
 
     # 4. Micro-tasks: only evaluated if no higher-precedence intents scored and prompt is not high-stakes
     # No port probes in classify_intent to preserve the <1ms zero-I/O guarantee.
     if not high_stakes and _MICRO_RE.search(lowered_prompt):
+        cat, tier, rat = resolve_efficiency_profile("MICRO", high_stakes=False)
         return IntentClassification(
             intent="MICRO",
             confidence=0.94,
@@ -309,16 +531,23 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
             suggested_mode="general",
             suggested_engine="ollama",
             high_stakes=False,
+            task_category=cat,
+            suggested_model_tier=tier,
+            efficiency_rationale=rat,
             metadata={"tier": 0}
         )
 
+    cat, tier, rat = resolve_efficiency_profile("GENERAL", high_stakes=high_stakes)
     return IntentClassification(
         intent="GENERAL",
         confidence=0.70,
         reason="General development query routed to primary advisory council",
         suggested_mode="general",
         suggested_engine=_council_engine(high_stakes),
-        high_stakes=high_stakes
+        high_stakes=high_stakes,
+        task_category=cat,
+        suggested_model_tier=tier,
+        efficiency_rationale=rat,
     )
 
 def execute_intent(classification: IntentClassification, raw_prompt: str, args: Any = None, env: Any = None) -> None:
@@ -330,6 +559,9 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
     stakes_label = " [HIGH STAKES - DUAL ADVISOR ADJUDICATION]" if classification.high_stakes else ""
     print(f"\n[Triad Intent Engine]: {intent}{stakes_label}")
     print(f"  Confidence: {int(classification.confidence * 100)}% | Rationale: {classification.reason}")
+    print(f"  Task Profile: {classification.task_category} | Model Tier: {classification.suggested_model_tier}")
+    if classification.efficiency_rationale:
+        print(f"  Efficiency Routing: {classification.efficiency_rationale}")
     print(f"  Target Mode: {classification.suggested_mode} | Recommended Engine: {classification.suggested_engine}\n")
 
     # Import triad engine dispatchers lazily to avoid circular dependencies
@@ -371,20 +603,58 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
         triad_engine.cmd_debug(args)
         return
 
-    if intent in ("ARCHITECT", "GENERAL", "MICRO"):
-        if not getattr(args, "prompt", None):
-            setattr(args, "prompt", raw_prompt)
-        if classification.suggested_engine == "competition":
-            setattr(args, "competition", True)
-        if hasattr(args, "engine") and getattr(args, "engine", "auto") == "auto":
-            if classification.suggested_engine == "ollama":
-                if triad_engine.is_port_open("127.0.0.1", PORT_OLLAMA):
-                    setattr(args, "engine", "ollama")
-                else:
-                    setattr(args, "engine", "auto")
-            elif classification.suggested_engine != "auto":
-                setattr(args, "engine", classification.suggested_engine)
-        triad_engine.cmd_consult(args)
+    if intent == "BROWSE":
+        paths = locate_workspace_paths(raw_prompt)
+        p_lower = raw_prompt.lower().strip()
+        is_pure_locator = any(p_lower.startswith(prefix) for prefix in (
+            "where is ", "where are ", "find file ", "locate file ", "locate path ",
+            "list files in ", "show files in ", "list directory ", "search files "
+        ))
+
+        if paths:
+            print(f"[Triad Local Browser]: Located {len(paths)} matching file path(s) in workspace:")
+            for p in paths[:15]:
+                print(f"    - {p}")
+            if len(paths) > 15:
+                print(f"    ... and {len(paths) - 15} more.")
+            print()
+            if is_pure_locator:
+                return
+            if args is not None:
+                existing_ctx = getattr(args, "context", "") or ""
+                setattr(args, "context", (existing_ctx + f"\nDiscovered local files:\n" + "\n".join(paths[:10])).strip())
+        else:
+            print(f"[Triad Local Browser]: No matching file paths found in workspace for query: '{raw_prompt.strip()}'.")
+            if is_pure_locator:
+                return
+
+        if args is not None:
+            if getattr(args, "task", "auto") in ("auto", None, ""):
+                setattr(args, "task", "browsing")
+            if not getattr(args, "prompt", None):
+                setattr(args, "prompt", raw_prompt)
+            triad_engine.cmd_consult(args)
+        return
+
+    if intent in ("SCRAPE", "REASONING", "ARCHITECT", "GENERAL", "MICRO"):
+        if args is not None:
+            if not getattr(args, "prompt", None):
+                setattr(args, "prompt", raw_prompt)
+            if classification.suggested_engine == "competition":
+                setattr(args, "competition", True)
+            if getattr(args, "task", "auto") in ("auto", None, ""):
+                setattr(args, "task", classification.task_category)
+            if hasattr(args, "engine") and getattr(args, "engine", "auto") == "auto":
+                if classification.suggested_engine == "ollama":
+                    if triad_engine.is_port_open("127.0.0.1", PORT_OLLAMA):
+                        setattr(args, "engine", "ollama")
+                    else:
+                        setattr(args, "engine", "auto")
+                elif classification.suggested_engine != "auto":
+                    setattr(args, "engine", classification.suggested_engine)
+            triad_engine.cmd_consult(args)
+        else:
+            print(f"[Triad Notice] Intent {intent} classified in headless mode (no args provided).")
         return
 
     if intent == "DEVICE":

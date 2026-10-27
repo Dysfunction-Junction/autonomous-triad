@@ -84,11 +84,33 @@
       "enabled": true
     },
     {
+      "name": "antigravity",
+      "display_name": "Google Antigravity (Gemini 2.5 Pro / 2M Context)",
+      "binary_path": "{localappdata}/agy/bin/agy.exe",
+      "fallback_binary": "agy",
+      "priority": 3,
+      "execution_flags": [
+        "--disable-slash-commands",
+        "--print-timeout",
+        "90s",
+        "--output-format",
+        "text",
+        "-p",
+        "{prompt}"
+      ],
+      "input_mode": "arg",
+      "output_mode": "stdout",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "enabled": true
+    },
+    {
       "name": "nous",
       "display_name": "Nous Research (Hermes Portal)",
       "binary_path": "python",
       "fallback_binary": "python3",
-      "priority": 3,
+      "priority": 4,
       "execution_flags": [
         "{triad_dir}/nous_bridge.py"
       ],
@@ -104,7 +126,7 @@
       "display_name": "Ollama Local Advisor (qwen3:1.7b)",
       "binary_path": "{localappdata}/Programs/Ollama/ollama.exe",
       "fallback_binary": "ollama",
-      "priority": 4,
+      "priority": 5,
       "execution_flags": [
         "run",
         "qwen3:1.7b",
@@ -122,7 +144,7 @@
       "name": "oz",
       "display_name": "Warp / Oz (Interactive Council Member)",
       "role": "interactive",
-      "priority": 5,
+      "priority": 6,
       "enabled": false,
       "registration_date": "2026-10-23",
       "dispatch_status": "pending_headless_transport",

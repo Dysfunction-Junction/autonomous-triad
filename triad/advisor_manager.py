@@ -56,6 +56,53 @@ ADVISOR_CALLS_LOG = LOGS_DIR / "advisor_calls.jsonl"
 LIMIT_MARKERS = ("session limit", "rate limit", "usage limit")
 TEST_ROLES = frozenset({"test", "mock"})
 
+# Task-specific prioritized advisor ordering for token efficiency & quality alignment across all onboard clients
+TASK_ADVISOR_PRIORITY: Dict[str, List[str]] = {
+    # Structural design, invariants, database schemas, security -> Claude 3.7 & Antigravity (2M context) lead
+    "architecture": ["claude", "antigravity", "codex", "nous", "ollama"],
+    # Deep algorithmic reasoning, complex state machines, difficult logic -> Codex (gpt-6-astra) leads
+    "reasoning": ["codex", "claude", "antigravity", "nous", "ollama"],
+    # High-volume scraping, HTML/DOM parsing, text extraction -> Ollama (local) & Nous Flash lead ($0 cost)
+    "scraping": ["ollama", "nous", "antigravity", "codex", "claude"],
+    # Filesystem & path browsing, directory exploration -> Ollama (local) & Nous Flash lead
+    "browsing": ["ollama", "nous", "antigravity", "codex", "claude"],
+    # Code review & verification -> Claude first, then Codex, then Antigravity
+    "coding": ["claude", "codex", "antigravity", "nous", "ollama"],
+    # Micro-tasks (commit messages, docstrings, formatting) -> Ollama local first, then Nous Flash
+    "micro": ["ollama", "nous", "antigravity", "claude", "codex"],
+    # General queries -> default configuration order
+    "general": ["claude", "codex", "antigravity", "nous", "ollama"],
+}
+
+
+def rank_advisors_for_task(advisors: List[Dict[str, Any]], task: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Ranks candidate advisors dynamically based on task profile and token efficiency.
+    Ensures high-token scraping/browsing tasks default to $0 local/flash tiers,
+    while architectural and deep reasoning tasks default to high-capacity reasoning models.
+    Preserves config priority order for general or unclassified tasks.
+    """
+    def _safe_priority(adv: Dict[str, Any]) -> int:
+        try:
+            val = adv.get("priority")
+            return int(val) if val is not None else 99
+        except (ValueError, TypeError):
+            return 99
+
+    norm_task = (task or "").strip().lower()
+    if not norm_task or norm_task in ("general", "auto") or norm_task not in TASK_ADVISOR_PRIORITY:
+        return sorted(advisors, key=_safe_priority)
+
+    preferred_order = TASK_ADVISOR_PRIORITY[norm_task]
+    order_map = {name: idx for idx, name in enumerate(preferred_order)}
+
+    def sort_key(adv: Dict[str, Any]) -> Tuple[int, int]:
+        name = str(adv.get("name") or "").lower()
+        task_rank = order_map.get(name, 90)
+        return (task_rank, _safe_priority(adv))
+
+    return sorted(advisors, key=sort_key)
+
 
 def test_advisors_allowed() -> bool:
     """Explicit ``--engine mock`` still works; this only gates *auto* failover."""
@@ -382,7 +429,9 @@ def _execute_single_advisor_raw(
     context: Optional[str] = None,
     diff: Optional[str] = None,
     mode: str = "general",
-    timeout: int = 120
+    timeout: int = 120,
+    *,
+    task: Optional[str] = None,
 ) -> str:
     """Execute a single advisor using its declared configuration."""
     raw_bin = advisor.get("binary_path", "")
@@ -411,13 +460,23 @@ def _execute_single_advisor_raw(
         if temp_out_path:
             flag = flag.replace("{output_file}", temp_out_path)
         if input_mode == "arg":
-            flag = flag.replace("{prompt}", full_prompt)
+            prompt_arg = full_prompt
+            # Guard against Windows CreateProcess 32k argv limit: fail closed on diff/gate reviews to prevent approving uninspected code
+            if os.name == "nt" and len(prompt_arg) > 24000:
+                if mode in ("review_diff", "gate") or diff:
+                    return f"[Error: prompt ({len(prompt_arg)} chars) exceeds Windows argv limit; advisor cannot review full diff safely]"
+                prompt_arg = prompt_arg[:23900] + "\n\n[Context truncated for CLI command-line length limits]"
+            flag = flag.replace("{prompt}", prompt_arg)
         resolved_flags.append(flag)
 
     cmd = [bin_path] + resolved_flags
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    if task:
+        env["TRIAD_TASK"] = task
+    else:
+        env.pop("TRIAD_TASK", None)
     for k, v in advisor.get("env", {}).items():
         env[k] = expand_env_value(str(k), str(v))
 
@@ -661,6 +720,8 @@ def _execute_single_advisor(
     mode: str = "general",
     timeout: int = 120,
     track_circuit: bool = True,
+    *,
+    task: Optional[str] = None,
 ) -> str:
     # Mock/test advisors are hermetic and must not consume the two live session slots.
     is_test_advisor = (
@@ -670,7 +731,7 @@ def _execute_single_advisor(
     if is_test_advisor:
         start_time = time.time()
         result = _execute_single_advisor_raw(
-            advisor, prompt, context=context, diff=diff, mode=mode, timeout=timeout
+            advisor, prompt, context=context, diff=diff, mode=mode, task=task, timeout=timeout
         )
     else:
         try:
@@ -684,7 +745,7 @@ def _execute_single_advisor(
                 # Start the clock after the slot is held so queue time is not an advisor failure.
                 start_time = time.time()
                 result = _execute_single_advisor_raw(
-                    advisor, prompt, context=context, diff=diff, mode=mode, timeout=timeout
+                    advisor, prompt, context=context, diff=diff, mode=mode, task=task, timeout=timeout
                 )
         except SessionSlotUnavailable as exc:
             # Do not record a circuit outcome. Slot contention is not an advisor failure.
@@ -706,10 +767,12 @@ def query_configured_advisor(
     config_path: Optional[Union[str, Path]] = None,
     track_circuit: bool = True,
     force_probe: bool = False,
+    *,
+    task: Optional[str] = None,
 ) -> str:
     """
     Query an advisor defined in advisors.json by name.
-    If advisor_name is 'auto', attempts advisors in priority order with zero-downtime failover.
+    If advisor_name is 'auto', attempts advisors in task-optimized priority order with zero-downtime failover.
     """
     if advisor_name.lower() == "auto":
         advisors = get_advisors(
@@ -719,6 +782,9 @@ def query_configured_advisor(
         )
         if not advisors:
             return "[Error: No enabled advisors found in configuration]"
+
+        # Rank advisors dynamically based on task efficiency & model suitability
+        advisors = rank_advisors_for_task(advisors, task=task)
 
         fail_notes = []
         skipped = []
@@ -736,7 +802,7 @@ def query_configured_advisor(
                 print(f"[Triad Ready] Skipping {name} ({why})", file=sys.stderr)
                 continue
             adv_timeout = int(adv.get("timeout") or timeout)
-            res = _execute_single_advisor(adv, prompt, context=context, diff=diff, mode=mode, timeout=adv_timeout, track_circuit=track_circuit)
+            res = _execute_single_advisor(adv, prompt, context=context, diff=diff, mode=mode, timeout=adv_timeout, track_circuit=track_circuit, task=task)
             if not is_failed_advisor_response(res):
                 if fail_notes or skipped:
                     prior = "; ".join(fail_notes + skipped)
@@ -772,7 +838,7 @@ def query_configured_advisor(
     if not advisor:
         return f"[Error: Advisor '{advisor_name}' not found in configuration]"
 
-    return _execute_single_advisor(advisor, prompt, context=context, diff=diff, mode=mode, timeout=timeout, track_circuit=track_circuit)
+    return _execute_single_advisor(advisor, prompt, context=context, diff=diff, mode=mode, timeout=timeout, track_circuit=track_circuit, task=task)
 
 
 if __name__ == "__main__":
