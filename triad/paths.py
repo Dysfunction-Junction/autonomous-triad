@@ -93,6 +93,11 @@ HERMES_PATH: Path = resolve_binary_path(
     LOCAL_APPDATA / "hermes" / "bin" / "hermes.exe",
     HOME / ".local" / "bin" / "hermes",
 )
+LLAMA_SERVER_PATH: Path = resolve_binary_path(
+    "TRIAD_LLAMA_SERVER_PATH", "llama-server",
+    LOCAL_APPDATA / "llama.cpp" / "llama-server.exe",
+    Path("/usr/local/bin/llama-server"),
+)
 OLLAMA_PATH: Path = resolve_binary_path(
     "TRIAD_OLLAMA_PATH", "ollama",
     LOCAL_APPDATA / "Programs" / "Ollama" / "ollama.exe",
@@ -121,6 +126,7 @@ PORT_PIECES_OS = _safe_int_env("TRIAD_PORT_PIECES_OS", 39300)
 PORT_PIECES_FOR_ALL = _safe_int_env("TRIAD_PORT_PIECES_FOR_ALL", _safe_int_env("PIECES_FOR_ALL_PORT", 39400))
 PORT_AGENT_MESH_MCP = _safe_int_env("TRIAD_PORT_AGENT_MESH", _safe_int_env("AGENT_MESH_PORT", 39401))
 PORT_NEO4J_BOLT = _safe_int_env("TRIAD_PORT_NEO4J_BOLT", _safe_int_env("NEO4J_BOLT_PORT", 7687))
+PORT_LLAMA_SERVER = _safe_int_env("TRIAD_PORT_LLAMA_SERVER", 8080)
 PORT_OLLAMA = _safe_int_env("TRIAD_PORT_OLLAMA", 11434)
 
 # --- Agent Mesh MCP -----------------------------------------------------------
@@ -129,8 +135,8 @@ AGENT_MESH_SERVER: Path = resolve_file_path("TRIAD_AGENT_MESH_SERVER", AGENT_MES
 
 __all__ = [
     "HOME", "LOCAL_APPDATA", "expand_path", "resolve_binary_path", "resolve_file_path",
-    "CLAUDE_PATH", "CODEX_PATH", "AGY_PATH", "HERMES_PATH", "OLLAMA_PATH",
+    "CLAUDE_PATH", "CODEX_PATH", "AGY_PATH", "HERMES_PATH", "LLAMA_SERVER_PATH", "OLLAMA_PATH",
     "CODEX_AUTH", "MEM0_SCRIPT", "ANDROID_RELAY_ENV",
     "AGENT_MESH_DIR", "AGENT_MESH_SERVER",
-    "PORT_HERMES_RELAY", "PORT_PIECES_PROXY", "PORT_TRIAD_SERVER", "PORT_PIECES_OS", "PORT_OLLAMA",
+    "PORT_HERMES_RELAY", "PORT_PIECES_PROXY", "PORT_TRIAD_SERVER", "PORT_PIECES_OS", "PORT_LLAMA_SERVER", "PORT_OLLAMA",
 ]

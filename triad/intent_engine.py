@@ -97,6 +97,12 @@ DOCTOR_KEYWORDS = [
     "audit subscriptions", "verify platforms"
 ]
 
+SYNC_KEYWORDS = [
+    "triad sync", "run sync", "sync triad", "synchronize triad", "sync ecosystem",
+    "sync launchers", "sync skills", "sync runtime", "update triad runtime", "sync hooks",
+    "sync status", "sync apply", "sync check", "check sync", "audit sync"
+]
+
 ARCHITECT_KEYWORDS = [
     "should we use", "should i use", "compare", "tradeoffs of",
     "architecture", "architectural", "system design", "pattern recommendation",
@@ -167,6 +173,7 @@ _GATE_RE = _compile_keywords(GATE_KEYWORDS, strict_boundary=False, suffixes=r"(?
 _DEVICE_RE = _compile_keywords(DEVICE_KEYWORDS, strict_boundary=True)
 _MEMORY_RE = _compile_keywords(MEMORY_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
 _DOCTOR_RE = _compile_keywords(DOCTOR_KEYWORDS, strict_boundary=True)
+_SYNC_RE = _compile_keywords(SYNC_KEYWORDS, strict_boundary=True)
 _ARCHITECT_RE = _compile_keywords(ARCHITECT_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
 _REVIEW_RE = _compile_keywords(REVIEW_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
 _DEBUG_RE = _compile_keywords(DEBUG_KEYWORDS, strict_boundary=False, suffixes=r"(?:s|es|ed|ing)?")
@@ -192,6 +199,7 @@ _SCORE_WEIGHTS = {
     "DOCTOR": 5.5,
     "MEMORY": 5.0,
     "REVIEW": 4.5,
+    "SYNC": 4.4,
     "REASONING": 4.2,
     "SCRAPE": 3.8,
     "BROWSE": 3.6,
@@ -207,6 +215,7 @@ _INTENT_CONFIDENCE = {
     "MESH": 0.95,
     "REVIEW": 0.86,
     "DOCTOR": 0.94,
+    "SYNC": 0.95,
     "DEBUG": 0.88,
     "ARCHITECT": 0.88,
     "REASONING": 0.92,
@@ -221,6 +230,7 @@ _INTENT_REASON = {
     "MESH": "Agent Mesh MCP, swarm coordination, or playbook orchestration keywords detected",
     "REVIEW": "Code review requested (will extract current git diff)",
     "DOCTOR": "System health, platform audit, or doctor keywords detected",
+    "SYNC": "Ecosystem synchronization, runtime engine, launcher, or git hook keywords detected",
     "DEBUG": "Runtime exception, compiler diagnostics, or debugging keywords detected",
     "ARCHITECT": "Architectural design inquiry or comparative decision dilemma detected",
     "REASONING": "Deep algorithmic reasoning, formal logic, or complex state machine analysis detected",
@@ -235,6 +245,7 @@ _INTENT_MODE = {
     "MESH": "mesh",
     "REVIEW": "review_diff",
     "DOCTOR": "doctor",
+    "SYNC": "sync",
     "DEBUG": "debug",
     "ARCHITECT": "architect",
     "REASONING": "consult",
@@ -247,6 +258,7 @@ _INTENT_ENGINE = {
     "MEMORY": "pieces",
     "DEVICE": "hermes",
     "DOCTOR": "auto",
+    "SYNC": "auto",
     "MESH": "mesh",
     "SCRAPE": "auto",
     "BROWSE": "auto",
@@ -303,6 +315,9 @@ def resolve_efficiency_profile(intent: str, high_stakes: bool = False) -> Tuple[
     if intent in ("DOCTOR",):
         return ("doctor", "tier_0_local", "Platform health and subscription cost audit executed locally in <1ms.")
 
+    if intent in ("SYNC",):
+        return ("sync", "tier_0_local", "Ecosystem synchronization (engine, launchers, skills, hooks) executed locally in <5ms.")
+
     if intent in ("MESH",):
         return ("mesh", "local_tools_or_slm", "Agent Mesh MCP swarm and peer channel coordination executed locally.")
 
@@ -324,21 +339,24 @@ def locate_workspace_paths(query: str, root_dir: Optional[Any] = None, max_resul
         query,
         flags=re.IGNORECASE,
     ).strip()
-    terms = [t for t in re.split(r"[\s,\'\"]+", cleaned) if len(t) >= 2]
+    terms = [t.rstrip("?.!,;:\"'").lstrip("?,;:\"'") for t in re.split(r"[\s,\'\"]+", cleaned)]
+    terms = [t for t in terms if len(t) >= 2]
     if not terms:
         return []
 
     def _is_safe(p: str) -> bool:
         norm = "/" + p.replace("\\", "/").lower().lstrip("/")
         base = norm.rsplit("/", 1)[-1]
-        # Match sensitive extensions, keys, credentials, and env files without over-matching environment.py
-        if base == ".env" or base.startswith((".env", "secrets.")) or base.endswith((".env", ".key", ".pem", ".keystore", ".jks", ".p12", ".pfx", ".kdbx")):
+        # Match sensitive extensions, keys, credentials, and env files without over-matching environment.py or docs
+        if base == ".env" or base.startswith((".env", "secrets.", "secret.")) or base.endswith((".env", ".key", ".pem", ".keystore", ".jks", ".p12", ".pfx", ".kdbx", ".tfvars", ".tfstate", ".tfstate.backup", ".vault-token", ".dockercfg", ".s3cfg", ".boto", ".ppk", ".p8")):
             return False
-        if ".env." in base:
+        if ".env." in base or base in (".npmrc", ".netrc", ".pgpass", ".git-credentials", ".pypirc", ".htpasswd", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "credentials.json"):
             return False
-        if base in (".npmrc", ".netrc", ".pgpass", ".git-credentials", "id_rsa", "id_ed25519", "credentials.json"):
+        if base == "kubeconfig" or base.startswith("kubeconfig.") or norm.endswith("/.docker/config.json") or "/.gnupg/" in norm:
             return False
-        if any(seg in norm for seg in ("/.ssh/", "/.aws/", "/secrets/", "/credentials/")):
+        if (base.startswith("service-account") or base.startswith("service_account")) and base.endswith((".json", ".key", ".pem", ".p12")):
+            return False
+        if any(seg in norm for seg in ("/.ssh/", "/.aws/", "/secrets/", "/credentials/", "/.kube/")):
             return False
         return True
 
@@ -482,6 +500,8 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
         scores["DEBUG"] = _SCORE_WEIGHTS["DEBUG"]
     if _DOCTOR_RE.search(lowered_prompt):
         scores["DOCTOR"] = _SCORE_WEIGHTS["DOCTOR"]
+    if _SYNC_RE.search(lowered_prompt):
+        scores["SYNC"] = _SCORE_WEIGHTS["SYNC"]
     if _MEMORY_RE.search(lowered_prompt):
         scores["MEMORY"] = _SCORE_WEIGHTS["MEMORY"]
     if lowered_prompt.startswith("review") or _REVIEW_RE.search(lowered_prompt):
@@ -501,6 +521,9 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
     if _MESH_RE.search(lowered_prompt):
         scores["MESH"] = _SCORE_WEIGHTS["MESH"]
 
+    if diff or re.match(r"(?:review|diff|debug|diagnose)\b", lowered_prompt):
+        scores.pop("SYNC", None)
+
     if scores:
         winner = max(scores, key=lambda k: (scores[k], _SCORE_WEIGHTS.get(k, 0)))
         meta: Dict[str, Any] = {"scores": scores}
@@ -513,7 +536,7 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
             reason=_INTENT_REASON.get(winner, "Scored intent match"),
             suggested_mode=_INTENT_MODE.get(winner, "general"),
             suggested_engine=_INTENT_ENGINE.get(winner, _council_engine(high_stakes)),
-            high_stakes=high_stakes if winner not in ("MEMORY", "DEVICE", "DOCTOR", "MESH", "SCRAPE", "BROWSE") else False,
+            high_stakes=high_stakes if winner not in ("MEMORY", "DEVICE", "DOCTOR", "SYNC", "MESH", "SCRAPE", "BROWSE") else False,
             task_category=cat,
             suggested_model_tier=tier,
             efficiency_rationale=rat,
@@ -556,13 +579,15 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
     directly to the appropriate subsystem or command handler.
     """
     intent = classification.intent
-    stakes_label = " [HIGH STAKES - DUAL ADVISOR ADJUDICATION]" if classification.high_stakes else ""
-    print(f"\n[Triad Intent Engine]: {intent}{stakes_label}")
-    print(f"  Confidence: {int(classification.confidence * 100)}% | Rationale: {classification.reason}")
-    print(f"  Task Profile: {classification.task_category} | Model Tier: {classification.suggested_model_tier}")
-    if classification.efficiency_rationale:
-        print(f"  Efficiency Routing: {classification.efficiency_rationale}")
-    print(f"  Target Mode: {classification.suggested_mode} | Recommended Engine: {classification.suggested_engine}\n")
+    is_json = getattr(args, "json", False)
+    if not is_json:
+        stakes_label = " [HIGH STAKES - DUAL ADVISOR ADJUDICATION]" if classification.high_stakes else ""
+        print(f"\n[Triad Intent Engine]: {intent}{stakes_label}")
+        print(f"  Confidence: {int(classification.confidence * 100)}% | Rationale: {classification.reason}")
+        print(f"  Task Profile: {classification.task_category} | Model Tier: {classification.suggested_model_tier}")
+        if classification.efficiency_rationale:
+            print(f"  Efficiency Routing: {classification.efficiency_rationale}")
+        print(f"  Target Mode: {classification.suggested_mode} | Recommended Engine: {classification.suggested_engine}\n")
 
     # Import triad engine dispatchers lazily to avoid circular dependencies
     try:
@@ -576,6 +601,34 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
 
     if intent == "DOCTOR":
         triad_engine.cmd_doctor(args)
+        return
+
+    if intent == "SYNC":
+        raw_toks = raw_prompt.lower().replace("’", "'").split()
+        toks = {t.strip(".,;:!?\"'").lstrip("-") for t in raw_toks}
+
+        engine_req = "engine" in toks
+        launchers_req = ("launchers" in toks) or ("launcher" in toks)
+        skills_req = ("skills" in toks) or ("skill" in toks)
+        hooks_req = ("hooks" in toks) or ("hook" in toks)
+        all_req = "all" in toks
+
+        import argparse
+        # Natural language auto-dispatch strictly enforces dry-run to prevent accidental disk mutation
+        sync_args = argparse.Namespace(
+            dry_run=True,
+            apply=False,
+            all=all_req,
+            engine=engine_req,
+            launchers=launchers_req,
+            skills=skills_req,
+            hooks=hooks_req,
+            json=getattr(args, "json", False)
+        )
+        if not is_json:
+            print("[Triad Auto]: Executing ecosystem synchronization in safe preview mode (dry-run).")
+            print("To apply mutations to disk, run explicitly: triad sync --apply\n")
+        triad_engine.cmd_sync(sync_args)
         return
 
     if intent == "GATE":

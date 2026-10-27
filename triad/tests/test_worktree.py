@@ -418,7 +418,7 @@ class TestGitWorktreeIsolation(unittest.TestCase):
                 dirty_file.write_text("temporary dirty data", encoding="utf-8")
                 subprocess.run(["git", "-C", str(wt1), "add", str(dirty_file)], capture_output=True)
                 subprocess.run(
-                    ["git", "-C", str(wt1), "-c", "user.name=Test", "-c", "user.email=test@test.local", "commit", "-m", "Temp commit"],
+                    ["git", "-C", str(wt1), "-c", "user.name=Test", "-c", "user.email=test@test.local", "commit", "--no-verify", "-m", "Temp commit"],
                     capture_output=True
                 )
                 untracked_file = wt1 / "untracked.log"

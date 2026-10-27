@@ -23,6 +23,8 @@ codex_test_out.txt
 auth.json
 token.json
 credentials.json
+advisors.local.json
+*.patch
 
 # Packaging build artifacts
 *.egg-info/

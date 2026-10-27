@@ -1,0 +1,9 @@
+# Enforce CRLF for Windows shell/cmd scripts
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Enforce LF for POSIX shell scripts and git hooks
+bin/triad text eol=lf
+pre-commit text eol=lf
+*.sh text eol=lf

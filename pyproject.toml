@@ -46,12 +46,13 @@ testpaths = ["triad/tests"]
 
 [project.scripts]
 triad = "triad.triad_engine:main"
+triad-agent = "triad.agent.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Papa-Bear4216/autonomous-triad"
 
 [tool.setuptools]
-packages = ["triad", "triad.bench"]
+packages = ["triad", "triad.bench", "triad.agent"]
 include-package-data = true
 
 [tool.setuptools.package-data]

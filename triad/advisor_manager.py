@@ -238,14 +238,48 @@ def build_advisor_prompt(prompt: str, context: Optional[str] = None, diff: Optio
         return f"{system_preamble}\nQUERY:\n{prompt}\n\nCONTEXT:\n{context or ''}\n"
 
 
-def load_config(config_path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
-    """Load advisor configuration JSON from disk."""
+def load_config(config_path: Optional[Union[str, Path]] = None, include_overlay: bool = True) -> Dict[str, Any]:
+    """Load advisor configuration JSON from disk, merging local overlay if present."""
     path = Path(config_path).resolve() if config_path else DEFAULT_CONFIG_PATH
     if not path.exists():
-        return {"advisors": []}
+        data = {"advisors": []}
+    else:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
 
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        return json.load(f)
+    def _adv_list(d):
+        v = d.get("advisors") if isinstance(d, dict) else None
+        return v if isinstance(v, list) else []
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid advisor configuration JSON in {path}: expected root object")
+    data["advisors"] = _adv_list(data)
+
+    if not include_overlay or os.environ.get("TRIAD_NO_OVERLAY") == "1":
+        return data
+
+    # Check for local overlays strictly within user ~/.agents boundary to preserve machine-local registrations
+    overlay_candidates = [
+        Path.home() / ".agents" / "triad" / "advisors.local.json",
+        Path.home() / ".agents" / "advisors.local.json",
+    ]
+    def _nm(a):
+        return str(a.get("name") or "").lower() if isinstance(a, dict) else ""
+
+    seen = {_nm(a) for a in data["advisors"]} - {""}
+    for o in dict.fromkeys(c.resolve() for c in overlay_candidates if c.exists()):
+        if o == path or not o.is_file():
+            continue
+        try:
+            o_data = json.loads(o.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        for adv in _adv_list(o_data):
+            n = _nm(adv)
+            if n and n not in seen:
+                data["advisors"].append(adv)
+                seen.add(n)
+    return data
 
 
 def save_config(config_data: Dict[str, Any], config_path: Optional[Union[str, Path]] = None) -> None:
@@ -392,7 +426,7 @@ def add_advisor(advisor_config: Dict[str, Any], config_path: Optional[Union[str,
     """
     Dynamically register or update an advisor in the configuration without touching code.
     """
-    data = load_config(config_path)
+    data = load_config(config_path, include_overlay=False)
     advisors = data.setdefault("advisors", [])
 
     name = advisor_config.get("name", "").lower()
@@ -411,7 +445,7 @@ def add_advisor(advisor_config: Dict[str, Any], config_path: Optional[Union[str,
 
 def remove_advisor(advisor_name: str, config_path: Optional[Union[str, Path]] = None) -> bool:
     """Remove an advisor by name from the configuration."""
-    data = load_config(config_path)
+    data = load_config(config_path, include_overlay=False)
     advisors = data.get("advisors", [])
     target = advisor_name.lower()
     filtered = [adv for adv in advisors if adv.get("name", "").lower() != target]
@@ -450,26 +484,76 @@ def _execute_single_advisor_raw(
         temp_fd, temp_out_path = tempfile.mkstemp(suffix=".txt")
         os.close(temp_fd)
 
-    # Parameter interpolation for flags
-    resolved_flags = []
+    # Pre-substitute static configuration placeholders for exact length calculations
     empty_mcp_str = str(DEFAULT_EMPTY_MCP)
     triad_dir_str = str(TRIAD_DIR)
-    for flag in flags:
-        flag = flag.replace("{empty_mcp}", empty_mcp_str)
-        flag = flag.replace("{triad_dir}", triad_dir_str)
+    base_flags = [f.replace("{empty_mcp}", empty_mcp_str).replace("{triad_dir}", triad_dir_str) for f in flags]
+
+    # Guard against Windows CreateProcess 32k argv limit and cmd.exe script injection hazards
+    prompt_arg = full_prompt
+    resolved_bin = shutil.which(bin_path) or bin_path
+    if input_mode == "arg" and os.name == "nt":
+        is_batch = str(resolved_bin).lower().endswith((".cmd", ".bat"))
+        if is_batch:
+            # Check for shell metacharacters that cause argument injection in cmd.exe (BatBadBut)
+            cmd_meta = ('&', '|', '<', '>', '^', '%', '"', '\n', '\r')
+            if any(c in prompt_arg for c in cmd_meta):
+                if temp_out_path and os.path.exists(temp_out_path):
+                    os.unlink(temp_out_path)
+                return f"[Error: Advisor binary {bin_path} is a Windows batch script (.cmd/.bat). Passing prompts containing shell metacharacters via cmd.exe argv is unsafe; configure input_mode: stdin or use a native .exe binary]"
+            cmd_limit = 7500
+        else:
+            cmd_limit = 30000
+
+        preview_out = temp_out_path or str(Path.home() / "AppData" / "Local" / "Temp" / "triad_preview_out.txt")
+        cmd_preview = [resolved_bin] + [f.replace("{output_file}", preview_out).replace("{prompt}", prompt_arg) for f in base_flags]
+        try:
+            expanded_len = len(subprocess.list2cmdline(cmd_preview))
+        except Exception:
+            expanded_len = len(prompt_arg) + 2000
+
+        if expanded_len > cmd_limit:
+            if mode in ("review_diff", "gate") or diff:
+                if temp_out_path and os.path.exists(temp_out_path):
+                    os.unlink(temp_out_path)
+                return f"[Error: command line ({expanded_len} chars) exceeds Windows argv limit ({cmd_limit}); advisor cannot review full diff safely]"
+
+            # Shrink iteratively until expanded length fits safely
+            mark = (" ... [Context truncated for CLI length limits] ... " if is_batch
+                    else "\n\n... [Context truncated for CLI command-line length limits] ...\n\n")
+            overshoot = expanded_len - cmd_limit
+            n = min(len(prompt_arg), max(200, len(prompt_arg) - overshoot - 500))
+            fitted = False
+            while n >= 200:
+                half = n // 2
+                cand = prompt_arg[:half] + mark + prompt_arg[-half:]
+                cand_preview = [resolved_bin] + [f.replace("{output_file}", preview_out).replace("{prompt}", cand) for f in base_flags]
+                try:
+                    cand_len = len(subprocess.list2cmdline(cand_preview))
+                except Exception:
+                    cand_len = len(cand) + 2000
+                if cand_len <= cmd_limit:
+                    prompt_arg = cand
+                    fitted = True
+                    break
+                overshoot = cand_len - cmd_limit
+                n = max(100, n - overshoot - 200)
+
+            if not fitted:
+                if temp_out_path and os.path.exists(temp_out_path):
+                    os.unlink(temp_out_path)
+                return f"[Error: Prompt and flags ({expanded_len} chars) exceed Windows argv limit ({cmd_limit}) even after context truncation]"
+
+    # Parameter interpolation for flags
+    resolved_flags = []
+    for flag in base_flags:
         if temp_out_path:
             flag = flag.replace("{output_file}", temp_out_path)
         if input_mode == "arg":
-            prompt_arg = full_prompt
-            # Guard against Windows CreateProcess 32k argv limit: fail closed on diff/gate reviews to prevent approving uninspected code
-            if os.name == "nt" and len(prompt_arg) > 24000:
-                if mode in ("review_diff", "gate") or diff:
-                    return f"[Error: prompt ({len(prompt_arg)} chars) exceeds Windows argv limit; advisor cannot review full diff safely]"
-                prompt_arg = prompt_arg[:23900] + "\n\n[Context truncated for CLI command-line length limits]"
             flag = flag.replace("{prompt}", prompt_arg)
         resolved_flags.append(flag)
 
-    cmd = [bin_path] + resolved_flags
+    cmd = [resolved_bin] + resolved_flags
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"

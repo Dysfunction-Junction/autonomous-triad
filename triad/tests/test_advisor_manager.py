@@ -10,6 +10,7 @@ Verifies:
 """
 
 import os
+import sys
 import json
 import shutil
 import tempfile
@@ -449,6 +450,33 @@ class TestCodexAuthDecode(unittest.TestCase):
 
         none_task_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, None)]
         self.assertEqual(none_task_ranked, general_ranked)
+
+    def test_execute_advisor_blocks_cmd_batch_scripts(self):
+        from triad.advisor_manager import _execute_single_advisor_raw
+        fake_advisor = {
+            "name": "batch_tool",
+            "binary_path": "my_tool.cmd",
+            "input_mode": "arg",
+            "execution_flags": ["-p", "{prompt}"]
+        }
+        res = _execute_single_advisor_raw(fake_advisor, "test & inject %VAR%")
+        if os.name == "nt":
+            self.assertIn("batch script", res.lower())
+            self.assertIn("unsafe", res.lower())
+
+    def test_execute_advisor_argv_limit_fails_on_diff(self):
+        from triad.advisor_manager import _execute_single_advisor_raw
+        fake_advisor = {
+            "name": "native_tool",
+            "binary_path": sys.executable,
+            "input_mode": "arg",
+            "execution_flags": ["-p", "{prompt}"]
+        }
+        # A massive diff that exceeds 30k
+        huge_diff = "diff --git a/foo.py b/foo.py\n" + ("+line of code\n" * 3000)
+        res = _execute_single_advisor_raw(fake_advisor, "review diff", diff=huge_diff, mode="review_diff")
+        if os.name == "nt":
+            self.assertIn("exceeds windows argv limit", res.lower())
 
 
 if __name__ == "__main__":

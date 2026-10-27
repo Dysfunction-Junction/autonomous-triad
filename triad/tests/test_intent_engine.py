@@ -1,6 +1,7 @@
 """Unit tests for Triad Intent Engine (intent_engine.py)."""
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triad.intent_engine import classify_intent, is_high_stakes
+from triad.intent_engine import classify_intent, is_high_stakes, locate_workspace_paths
 
 class TestIntentEngine(unittest.TestCase):
 
@@ -183,6 +184,13 @@ class TestIntentEngine(unittest.TestCase):
         self.assertEqual(res.suggested_engine, "competition") # dual adjudication
         self.assertEqual(res.suggested_model_tier, "tier_2_dual_competition")
 
+    def test_classify_sync_task(self):
+        res = classify_intent("run triad sync across all components")
+        self.assertEqual(res.intent, "SYNC")
+        self.assertEqual(res.task_category, "sync")
+        self.assertEqual(res.suggested_mode, "sync")
+        self.assertEqual(res.suggested_model_tier, "tier_0_local")
+
     def test_locate_workspace_paths(self):
         import tempfile
         from triad.intent_engine import locate_workspace_paths
@@ -205,6 +213,47 @@ class TestIntentEngine(unittest.TestCase):
             # Must filter out sensitive secret/env files
             env_matches = locate_workspace_paths("secret env", root_dir=tmp_path)
             self.assertEqual(env_matches, [])
+
+    def test_sync_intent_diff_exclusion(self):
+        # A code review prompt containing sync keywords must NOT route to SYNC when diff is present
+        classification = classify_intent("review this sync hooks patch", diff="diff --git a/foo b/foo")
+        self.assertEqual(classification.intent, "REVIEW")
+
+    def test_locate_workspace_paths_preserves_leading_dots_and_extensions(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / ".eslintrc.json").write_text("{}", encoding="utf-8")
+            (tmp_path / "app.py").write_text("print('hello')", encoding="utf-8")
+
+            matches_dot = locate_workspace_paths("where is .eslintrc.json", root_dir=tmp_path)
+            self.assertTrue(any(".eslintrc.json" in m for m in matches_dot))
+
+            matches_py = locate_workspace_paths("find app.py", root_dir=tmp_path)
+            self.assertTrue(any("app.py" in m for m in matches_py))
+
+
+    def test_check_sync_status_routes_to_sync(self):
+        res = classify_intent("check triad sync status")
+        self.assertEqual(res.intent, "SYNC")
+
+    def test_locate_workspace_paths_filters_terraform_docker_and_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "terraform.tfstate").write_text("{}", encoding="utf-8")
+            (tmp_path / ".htpasswd").write_text("user:pass", encoding="utf-8")
+            (tmp_path / "id_ecdsa").write_text("key", encoding="utf-8")
+            (tmp_path / "service-account-notes.md").write_text("# Notes", encoding="utf-8")
+            (tmp_path / "service-account-key.json").write_text("{}", encoding="utf-8")
+
+            # Must filter sensitive credentials
+            self.assertEqual(locate_workspace_paths("terraform.tfstate", root_dir=tmp_path), [])
+            self.assertEqual(locate_workspace_paths(".htpasswd", root_dir=tmp_path), [])
+            self.assertEqual(locate_workspace_paths("id_ecdsa", root_dir=tmp_path), [])
+            self.assertEqual(locate_workspace_paths("service-account-key.json", root_dir=tmp_path), [])
+
+            # Must permit markdown documentation
+            doc_matches = locate_workspace_paths("service-account-notes.md", root_dir=tmp_path)
+            self.assertTrue(any("service-account-notes.md" in m for m in doc_matches))
 
 
 if __name__ == "__main__":

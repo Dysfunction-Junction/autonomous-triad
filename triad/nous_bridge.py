@@ -11,6 +11,7 @@ calls, each up to `timeout` seconds — not sub-second.
 
 import sys
 import os
+import re
 import json
 import time
 import math
@@ -73,6 +74,11 @@ TASK_MODEL_CASCADES = {
         "poolside/laguna-xs-2.1:free",       # 1.8s instant response for commit msg/docstrings
         "stepfun/step-3.7-flash:free",
     ],
+    "sync": [
+        "stepfun/step-3.7-flash:free",       # Fast zero-latency sync verification ($0 cost)
+        "poolside/laguna-xs-2.1:free",
+        "upstage/solar-pro4:free",
+    ],
     "general": [
         "stepfun/step-3.7-flash:free",       # Fast and reliable general knowledge & advice
         "upstage/solar-pro4:free",           # Balanced general knowledge fallback
@@ -88,28 +94,35 @@ def detect_task_category(prompt: str, mode: Optional[str] = None, task: Optional
     if candidate_task and candidate_task not in ("general", "auto") and candidate_task in TASK_MODEL_CASCADES:
         return candidate_task
 
+    if mode in ("review_diff", "debug", "gate", "coding"):
+        return "coding"
+    if mode in ("architect", "consult", "architecture"):
+        return "architecture"
     if mode in ("scraping", "scrape"):
         return "scraping"
     if mode in ("browsing", "browse"):
         return "browsing"
     if mode in ("reasoning", "logic"):
         return "reasoning"
-    if mode in ("review_diff", "debug"):
-        return "coding"
-    if mode in ("architect", "consult"):
-        return "architecture"
     if mode in ("micro",):
         return "micro"
+    if mode in ("sync",):
+        return "sync"
 
     p_lower = prompt.lower()
+    # Code diffs, compiler diagnostics, and bug remediation take precedence
+    if any(k in p_lower for k in ("diff --git", "traceback (most recent call last)", "syntaxerror", "typeerror", "referenceerror")) or re.search(r"```(?:python|py|ts|tsx|js|jsx)\b", p_lower):
+        return "coding"
+    if re.search(r"\b(?:debug|bug|patch|refactor|compil)\w*", p_lower) or any(k in p_lower for k in ("unittest", "pytest", "nullpointer")):
+        return "coding"
+    if re.search(r"^\s*(def|class|import)\s", prompt, re.M):
+        return "coding"
     if any(k in p_lower for k in ("scrape", "scraping", "extract table", "parse html", "dom traversal", "html dump", "crawl", "soup")):
         return "scraping"
     if any(k in p_lower for k in ("browse", "file tree", "find file", "locate path", "directory tree", "where is file")):
         return "browsing"
     if any(k in p_lower for k in ("formal proof", "state machine", "deadlock", "race condition", "invariant proof", "recurrence")):
         return "reasoning"
-    if any(k in p_lower for k in ("diff --git", "traceback", "def ", "class ", "import ", "syntaxerror", "bug", "patch")):
-        return "coding"
     if any(k in p_lower for k in ("architecture", "system design", "schema", "scalability", "tradeoff", "consensus")):
         return "architecture"
     if any(k in p_lower for k in ("phone", "android", "screen", "sms", "notification", "battery", "relay")):

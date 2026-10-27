@@ -5869,6 +5869,160 @@ def is_plausible_natural_language(first_arg: str, total_args: int, known_command
     return True
 
 
+def cmd_sync(args):
+    """
+    Synchronize Triad runtime engine, CLI launchers, skills, and multi-repo pre-commit hooks.
+    Ensures zero drift between repository development and the live user execution environment.
+    """
+    try:
+        from triad.sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
+    except ImportError:
+        from sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
+
+    apply_flag = getattr(args, "apply", False)
+    dry_run = getattr(args, "dry_run", False) or not apply_flag
+    sync_all = getattr(args, "all", False)
+    is_json = getattr(args, "json", False)
+
+    include_engine = getattr(args, "engine", False)
+    include_launchers = getattr(args, "launchers", False)
+    include_skills = getattr(args, "skills", False)
+    include_hooks = getattr(args, "hooks", False)
+
+    # Positional component argument routing
+    comp = getattr(args, "component", None)
+    if comp == "all":
+        sync_all = True
+    elif comp == "engine":
+        include_engine = True
+    elif comp == "launchers":
+        include_launchers = True
+    elif comp == "skills":
+        include_skills = True
+    elif comp == "hooks":
+        include_hooks = True
+
+    # If no specific component flag is passed, default to standard components (engine, launchers, skills)
+    if not (sync_all or include_engine or include_launchers or include_skills or include_hooks):
+        include_engine = True
+        include_launchers = True
+        include_skills = True
+
+    report = run_full_sync(
+        dry_run=dry_run,
+        sync_all=sync_all,
+        include_engine=include_engine,
+        include_launchers=include_launchers,
+        include_skills=include_skills,
+        include_hooks=include_hooks,
+    )
+
+    if is_json:
+        print(json.dumps(report, indent=2))
+        if report.get("has_error"):
+            sys.exit(1)
+        return
+
+    print("================================================================================")
+    print("               AUTONOMOUS MULTI-AGENT TRIAD: ECOSYSTEM SYNCHRONIZATION           ")
+    print("================================================================================")
+    mode_str = "[DRY-RUN PREVIEW]" if dry_run else "[ACTIVE SYNCHRONIZATION]"
+    print(f"Status: {mode_str}\n")
+
+    # Engine
+    e = report["engine"]
+    if e.get("status") != "skipped":
+        print(f"[1] Runtime Engine: {e['status'].upper()}")
+        print(f"    - Target:  {e.get('target', '')}")
+        print(f"    - Source:  {e.get('source', '')}")
+        print(f"    - Details: {e.get('detail', '')}\n")
+
+    # Launchers
+    l = report["launchers"]
+    if l.get("status") != "skipped":
+        path_badge = "OK (on PATH)" if l.get("path_ok") else "WARNING: not on PATH"
+        print(f"[2] CLI Launchers: {l['status'].upper()} | {path_badge}")
+        print(f"    - Target:  {l.get('target', '')}")
+        print(f"    - Details: {l.get('detail', '')}\n")
+
+    # Skills
+    s = report["skills"]
+    if s.get("status") != "skipped":
+        print(f"[3] Claude Advisor Skill Bridge: {s['status'].upper()}")
+        print(f"    - Target:  {s.get('target', '')}")
+        print(f"    - Details: {s.get('detail', '')}\n")
+
+    # Hooks
+    if report.get("hooks"):
+        print(f"[4] Active Repository Pre-Commit Hooks:")
+        for h in report["hooks"]:
+            status_tag = f"[{h['hook_status'].upper()}]"
+            action_note = f" -> {h['action_taken']}" if h.get("action_taken") != "none" else ""
+            print(f"    - {h['repo']:<22} {status_tag:<16} {h['detail']}{action_note}")
+        print()
+
+    print("================================================================================")
+    statuses = [report[k]["status"] for k in ("engine", "launchers", "skills") if report.get(k)]
+    hook_actions = [h.get("action_taken") for h in report.get("hooks", [])]
+    has_drift = (
+        any(st in ("drift_detected", "warning", "degraded") for st in statuses)
+        or any(a in ("would_install", "installed") for a in hook_actions)
+        or any(h.get("hook_status") != "installed" for h in report.get("hooks", []))
+    )
+
+    has_warning = any(st in ("warning", "degraded") for st in statuses)
+
+    check_mode = getattr(args, "check", False)
+
+    if report.get("has_error"):
+        print("[ERROR] TRIAD SYNC FAILED: Errors encountered during synchronization.")
+        print("================================================================================\n")
+        sys.exit(1)
+    elif has_drift and dry_run:
+        print("TRIAD SYNC: DRIFT DETECTED (Run with --apply to synchronize ecosystem)")
+        print("================================================================================\n")
+        if check_mode:
+            sys.exit(2)
+    elif has_warning:
+        print("TRIAD SYNC WARNING: Synchronization completed with warnings (e.g. junction failed, copied fallback).")
+        print("================================================================================\n")
+    else:
+        print("TRIAD SYNC COMPLETE: Zero drift maintained across development and runtime.")
+        print("================================================================================\n")
+
+
+def cmd_agent(args):
+    """
+    Launch Triad Agent: Autonomous zero-cost terminal AI agent with RouteLLM waterfall.
+    """
+    pkg_root = str(TRIAD_DIR.parent)
+    if pkg_root not in sys.path:
+        sys.path.insert(0, pkg_root)
+    if str(TRIAD_DIR) not in sys.path:
+        sys.path.insert(0, str(TRIAD_DIR))
+
+    try:
+        from triad.agent.cli import main as agent_cli_main
+    except ImportError:
+        from agent.cli import main as agent_cli_main
+
+    argv = []
+    if getattr(args, "prompt", None):
+        argv.extend(["-p", args.prompt])
+    if getattr(args, "resume", False):
+        argv.append("-c")
+    if getattr(args, "auto_approve", False):
+        argv.append("-y")
+    if getattr(args, "force_heavy", False):
+        argv.append("--heavy")
+    if getattr(args, "force_free", False):
+        argv.append("--free")
+    if getattr(args, "force_local", False):
+        argv.append("--local")
+
+    sys.exit(agent_cli_main(argv))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triad", description="Autonomous Multi-Agent Triad Orchestrator")
     subparsers = parser.add_subparsers(dest="command", help="Triad command to execute")
@@ -5989,6 +6143,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_mesh.add_argument("--origin", default="antigravity", help="Origin identity (antigravity, claude, codex, cursor, grok)")
     p_mesh.add_argument("--json", action="store_true", help="Output results in JSON format")
 
+    # sync
+    p_sync = subparsers.add_parser("sync", help="Synchronize runtime engine, launchers, skills, and multi-repo git hooks")
+    p_sync.add_argument("component", nargs="?", default=None, choices=["engine", "launchers", "skills", "hooks", "all"], help="Optional single component to synchronize")
+    p_sync.add_argument("--all", "-a", action="store_true", help="Synchronize all components (engine, launchers, skills, and install missing repo hooks)")
+    p_sync.add_argument("--engine", action="store_true", help="Synchronize triad engine to ~/.agents/triad (verify/establish live junction)")
+    p_sync.add_argument("--launchers", action="store_true", help="Synchronize triad CLI launchers to ~/.local/bin")
+    p_sync.add_argument("--skills", action="store_true", help="Synchronize claude-advisor skill to ~/.agents/skills/claude-advisor")
+    p_sync.add_argument("--hooks", action="store_true", help="Audit and install/update pre-commit hooks in active ecosystem repos")
+    p_sync.add_argument("--dry-run", action="store_true", help="Preview synchronization actions without modifying filesystem")
+    p_sync.add_argument("--check", action="store_true", help="Exit with code 2 if drift is detected in dry-run mode (useful for CI/gates)")
+    p_sync.add_argument("--apply", action="store_true", help="Execute synchronization (overrides dry-run default from natural language)")
+    p_sync.add_argument("--json", action="store_true", help="Output synchronization audit in structured JSON format")
+
+    # agent
+    p_agent = subparsers.add_parser("agent", help="Launch interactive or single-shot autonomous zero-cost agent")
+    p_agent.add_argument("-p", "--print", "--prompt", dest="prompt", type=str, default="", help="Run a single prompt non-interactively")
+    p_agent.add_argument("-c", "--continue", dest="resume", action="store_true", help="Resume most recent conversation session")
+    p_agent.add_argument("-y", "--auto", "--dangerously-skip-permissions", dest="auto_approve", action="store_true", help="Auto-approve tool modifications")
+    p_agent.add_argument("--heavy", "--pro", dest="force_heavy", action="store_true", help="Force high-tier primary model (Claude 3.7 Sonnet / Codex)")
+    p_agent.add_argument("--free", "--nous", dest="force_free", action="store_true", help="Force cloud free tier (stepfun:free)")
+    p_agent.add_argument("--local", "--fast", dest="force_local", action="store_true", help="Force local llama-server (:8080)")
+
     return parser
 
 
@@ -5997,12 +6173,25 @@ def main():
     known_commands = {
         "doctor", "review", "consult", "debug", "gate",
         "bench", "worktree", "auto", "intent", "run",
-        "listen", "serve", "hook", "mesh", "swarm",
+        "listen", "serve", "hook", "mesh", "swarm", "sync",
+        "agent",
         "-h", "--help"
     }
-    if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
-        if is_plausible_natural_language(sys.argv[1], len(sys.argv), known_commands):
-            sys.argv.insert(1, "auto")
+    known_sync_components = {"engine", "launchers", "skills", "hooks", "all"}
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "sync" and len(sys.argv) > 2 and not sys.argv[2].startswith("-"):
+            sub = sys.argv[2].lower()
+            if sub in known_sync_components:
+                sys.argv[2] = sub
+            elif sub in ("status", "preview", "check", "audit"):
+                sys.argv[2] = "--dry-run"
+            elif sub in ("apply", "force"):
+                sys.argv[2] = "--apply"
+            else:
+                sys.argv[1:] = ["auto", "triad " + " ".join(sys.argv[1:])]
+        elif sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
+            if is_plausible_natural_language(sys.argv[1], len(sys.argv), known_commands):
+                sys.argv.insert(1, "auto")
 
     parser = build_parser()
     args = parser.parse_args()
@@ -6027,6 +6216,8 @@ def main():
         "serve": cmd_listen,
         "mesh": cmd_mesh,
         "swarm": cmd_mesh,
+        "sync": cmd_sync,
+        "agent": cmd_agent,
     }
 
     handler = dispatch.get(args.command)
