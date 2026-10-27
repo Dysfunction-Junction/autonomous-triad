@@ -41,6 +41,8 @@ try:
     from triad.paths import (
         CLAUDE_PATH, CODEX_PATH, AGY_PATH, HERMES_PATH, CODEX_AUTH,
         PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER,
+        PORT_EXOCORTEX_DAEMON, PORT_PIECES_PROXY, PORT_PIECES_FOR_ALL,
+        PORT_AGENT_MESH_MCP, PORT_NEO4J_BOLT,
         AGENT_MESH_DIR, AGENT_MESH_SERVER,
     )
     from triad.procutil import (
@@ -56,6 +58,8 @@ except ImportError:
     from paths import (
         CLAUDE_PATH, CODEX_PATH, AGY_PATH, HERMES_PATH, CODEX_AUTH,
         PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER,
+        PORT_EXOCORTEX_DAEMON, PORT_PIECES_PROXY, PORT_PIECES_FOR_ALL,
+        PORT_AGENT_MESH_MCP, PORT_NEO4J_BOLT,
         AGENT_MESH_DIR, AGENT_MESH_SERVER,
     )
     from procutil import (
@@ -286,6 +290,11 @@ def collect_doctor_report(probe_advisors: bool = True, claude_probe_timeout: int
     # 5. Local subsystems
     local = {
         "pieces_os": {"port": PORT_PIECES_OS, "online": is_port_open("127.0.0.1", PORT_PIECES_OS)},
+        "exocortex_daemon": {"port": PORT_EXOCORTEX_DAEMON, "online": is_port_open("127.0.0.1", PORT_EXOCORTEX_DAEMON)},
+        "pieces_proxy": {"port": PORT_PIECES_PROXY, "online": is_port_open("127.0.0.1", PORT_PIECES_PROXY)},
+        "pieces_for_all": {"port": PORT_PIECES_FOR_ALL, "online": is_port_open("127.0.0.1", PORT_PIECES_FOR_ALL)},
+        "agent_mesh": {"port": PORT_AGENT_MESH_MCP, "online": is_port_open("127.0.0.1", PORT_AGENT_MESH_MCP)},
+        "neo4j": {"port": PORT_NEO4J_BOLT, "online": is_port_open("127.0.0.1", PORT_NEO4J_BOLT)},
         "ollama": {"port": PORT_OLLAMA, "online": is_port_open("127.0.0.1", PORT_OLLAMA)},
         "triad_server": {"port": PORT_TRIAD_SERVER, "online": is_port_open("127.0.0.1", PORT_TRIAD_SERVER)},
     }
@@ -411,12 +420,23 @@ def _render_doctor_report(report: Dict[str, Any]) -> None:
 
     loc = report["local"]
     print("\n[5] Local Subsystems (On-Device Local Memory & Execution)")
-    p = loc["pieces_os"]
-    print(f"    - PiecesOS:     {'ONLINE' if p['online'] else 'STANDBY'} (port {p['port']})")
-    o = loc["ollama"]
-    print(f"    - Ollama:       {'ONLINE' if o['online'] else 'STANDBY'} (port {o['port']})")
-    t = loc["triad_server"]
-    print(f"    - Triad HTTP:   {'LISTENING' if t['online'] else 'NOT RUNNING'} (port {t['port']}, start with 'triad listen')")
+    subsystem_labels = [
+        ("pieces_os", "PiecesOS"),
+        ("exocortex_daemon", "Exocortex Daemon"),
+        ("pieces_proxy", "Pieces Proxy"),
+        ("pieces_for_all", "Pieces Gateway"),
+        ("agent_mesh", "Agent Mesh MCP"),
+        ("neo4j", "Neo4j Graph"),
+        ("ollama", "Ollama"),
+        ("triad_server", "Triad HTTP"),
+    ]
+    for key, label in subsystem_labels:
+        sub = loc.get(key)
+        if sub:
+            st = "ONLINE" if sub["online"] else "STANDBY"
+            if key == "triad_server":
+                st = "LISTENING" if sub["online"] else "NOT RUNNING"
+            print(f"    - {label:<17} {st:<11} (port {sub['port']})")
 
     circ = report.get("circuits") or {}
     print("\n[6] Advisor Circuits (skip open advisors instead of waiting out their timeout)")
