@@ -287,17 +287,22 @@ def collect_doctor_report(probe_advisors: bool = True, claude_probe_timeout: int
         "relay_listening": is_port_open("127.0.0.1", PORT_HERMES_RELAY),
     }
 
-    # 5. Local subsystems
-    local = {
-        "pieces_os": {"port": PORT_PIECES_OS, "online": is_port_open("127.0.0.1", PORT_PIECES_OS)},
-        "exocortex_daemon": {"port": PORT_EXOCORTEX_DAEMON, "online": is_port_open("127.0.0.1", PORT_EXOCORTEX_DAEMON)},
-        "pieces_proxy": {"port": PORT_PIECES_PROXY, "online": is_port_open("127.0.0.1", PORT_PIECES_PROXY)},
-        "pieces_for_all": {"port": PORT_PIECES_FOR_ALL, "online": is_port_open("127.0.0.1", PORT_PIECES_FOR_ALL)},
-        "agent_mesh": {"port": PORT_AGENT_MESH_MCP, "online": is_port_open("127.0.0.1", PORT_AGENT_MESH_MCP)},
-        "neo4j": {"port": PORT_NEO4J_BOLT, "online": is_port_open("127.0.0.1", PORT_NEO4J_BOLT)},
-        "ollama": {"port": PORT_OLLAMA, "online": is_port_open("127.0.0.1", PORT_OLLAMA)},
-        "triad_server": {"port": PORT_TRIAD_SERVER, "online": is_port_open("127.0.0.1", PORT_TRIAD_SERVER)},
+    # 5. Local subsystems (parallel loopback probe for zero latency)
+    from concurrent.futures import ThreadPoolExecutor
+
+    subsystem_targets = {
+        "pieces_os": PORT_PIECES_OS,
+        "exocortex_daemon": PORT_EXOCORTEX_DAEMON,
+        "pieces_proxy": PORT_PIECES_PROXY,
+        "pieces_for_all": PORT_PIECES_FOR_ALL,
+        "agent_mesh": PORT_AGENT_MESH_MCP,
+        "neo4j": PORT_NEO4J_BOLT,
+        "ollama": PORT_OLLAMA,
+        "triad_server": PORT_TRIAD_SERVER,
     }
+    with ThreadPoolExecutor(max_workers=len(subsystem_targets)) as executor:
+        futures = {k: executor.submit(is_port_open, "127.0.0.1", port) for k, port in subsystem_targets.items()}
+        local = {k: {"port": subsystem_targets[k], "online": futures[k].result()} for k in subsystem_targets}
 
     circuits = snapshot_circuits()
     open_circuits = {
@@ -433,7 +438,7 @@ def _render_doctor_report(report: Dict[str, Any]) -> None:
     for key, label in subsystem_labels:
         sub = loc.get(key)
         if sub:
-            st = "ONLINE" if sub["online"] else "STANDBY"
+            st = "ONLINE" if sub["online"] else "OFFLINE"
             if key == "triad_server":
                 st = "LISTENING" if sub["online"] else "NOT RUNNING"
             print(f"    - {label:<17} {st:<11} (port {sub['port']})")

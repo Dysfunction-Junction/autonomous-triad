@@ -115,12 +115,12 @@ def _safe_int_env(var: str, default: int) -> int:
 # --- Well-known local ports ---------------------------------------------------
 PORT_HERMES_RELAY = _safe_int_env("TRIAD_PORT_HERMES_RELAY", 8766)
 PORT_PIECES_PROXY = _safe_int_env("TRIAD_PORT_PIECES_PROXY", 8787)
-PORT_EXOCORTEX_DAEMON = _safe_int_env("EXOCORTEX_PORT", 8788)
+PORT_EXOCORTEX_DAEMON = _safe_int_env("TRIAD_PORT_EXOCORTEX_DAEMON", _safe_int_env("EXOCORTEX_PORT", 8788))
 PORT_TRIAD_SERVER = _safe_int_env("TRIAD_PORT", 8789)
 PORT_PIECES_OS = _safe_int_env("TRIAD_PORT_PIECES_OS", 39300)
-PORT_PIECES_FOR_ALL = _safe_int_env("PIECES_FOR_ALL_PORT", 39400)
-PORT_AGENT_MESH_MCP = _safe_int_env("AGENT_MESH_PORT", 39401)
-PORT_NEO4J_BOLT = _safe_int_env("NEO4J_BOLT_PORT", 7687)
+PORT_PIECES_FOR_ALL = _safe_int_env("TRIAD_PORT_PIECES_FOR_ALL", _safe_int_env("PIECES_FOR_ALL_PORT", 39400))
+PORT_AGENT_MESH_MCP = _safe_int_env("TRIAD_PORT_AGENT_MESH", _safe_int_env("AGENT_MESH_PORT", 39401))
+PORT_NEO4J_BOLT = _safe_int_env("TRIAD_PORT_NEO4J_BOLT", _safe_int_env("NEO4J_BOLT_PORT", 7687))
 PORT_OLLAMA = _safe_int_env("TRIAD_PORT_OLLAMA", 11434)
 
 # --- Agent Mesh MCP -----------------------------------------------------------
