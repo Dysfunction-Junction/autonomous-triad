@@ -45,10 +45,21 @@ class AgentRuntime:
         self.max_turns = max_turns
         self.session_id = f"session_{int(time.time())}"
         self.history: List[Dict[str, str]] = []
+        self._turn_active: bool = False
+        self._turn_start: int = 0
 
     def _get_system_prompt(self) -> str:
-        return f"""You are Triad Agent, an autonomous coding and systems agent working directly in {self.workspace_root}.
-You execute tasks by thinking, inspecting the workspace, and taking concrete actions using workspace tools.
+        return f"""You are Triad, an autonomous terminal engineer and orchestrator working directly in {self.workspace_root}.
+You talk directly with the user and execute tasks locally. You handle routine code, workspace exploration, edits, and terminal commands using your local tools.
+
+CHIEF ARCHITECT ON STANDBY (CLAUDE CODE / CODEX):
+Claude Code and OpenAI Codex serve as your Chief Architect and Advisory Council. They are reserved for BIG DECISIONS:
+- High-level architectural designs, system refactors, and migrations
+- Complex state machines, concurrency models, and security designs
+- Stubborn bugs or failures that you cannot solve after investigation
+- Architectural signoff
+
+When you encounter an architectural fork or a stubborn bug, use the `consult_architect` tool to delegate the question to the Chief Architect. Review the advice received, and proceed with executing it.
 
 AVAILABLE TOOLS:
 1. read_file(path: str, start_line: int = 1, end_line: int = 500)
@@ -57,6 +68,7 @@ AVAILABLE TOOLS:
 4. list_dir(path: str = ".", pattern: str = "*", recursive: bool = false)
 5. search_code(pattern: str, path: str = ".")
 6. run_command(command: str)
+7. consult_architect(query: str, context: str = ""): Delegate big decisions or stubborn bugs to Claude/Codex.
 
 TO CALL A TOOL:
 Output a single tool call block formatted exactly like this:
@@ -109,7 +121,13 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            msg = choice.get("message") or {}
+            content = msg.get("content") or ""
+            reasoning = msg.get("reasoning_content") or ""
+            if not content and reasoning:
+                content = f"[Model Thought]:\n{reasoning}"
+            return content
 
     def _call_tier_primary(self, messages: List[Dict[str, str]]) -> str:
         """Invokes primary subscription advisor (Claude Code / Codex) via local CLI wrapper."""
@@ -203,6 +221,8 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
 
     def _parse_tool_call(self, text: str) -> Optional[Dict[str, Any]]:
         """Extracts JSON tool call block from model response."""
+        if text.startswith("[Model Thought]:"):
+            return None
         pattern = r"```(?:tool_call|json)?\s*(\{[\s\S]*?\})\s*```"
         match = re.search(pattern, text)
         if match:
@@ -251,56 +271,74 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
         if not self.history:
             self.history.append({"role": "system", "content": self._get_system_prompt()})
 
+        self._turn_start = len(self.history)
+        self._turn_active = True
         self.history.append({"role": "user", "content": user_input})
 
         current_turn = 0
         final_response = ""
 
-        while current_turn < self.max_turns:
-            current_turn += 1
+        try:
+            while current_turn < self.max_turns:
+                current_turn += 1
 
-            # Dispatch to LLM via waterfall
-            assistant_reply, active_tier = self._dispatch_waterfall(
-                decision=decision,
-                messages=self.history,
-                on_status=on_status
-            )
+                # Dispatch to LLM via waterfall
+                assistant_reply, active_tier = self._dispatch_waterfall(
+                    decision=decision,
+                    messages=self.history,
+                    on_status=on_status
+                )
 
-            # Check for tool call
-            tool_call = self._parse_tool_call(assistant_reply)
+                # Check for tool call
+                tool_call = self._parse_tool_call(assistant_reply)
 
-            if tool_call:
-                tool_name = tool_call.get("name")
-                if on_status:
-                    on_status(f"\033[1;36m[Tool Action]\033[0m {tool_name}({json.dumps(tool_call.get('arguments', {}))[:80]}...)")
+                if tool_call:
+                    tool_name = tool_call.get("name")
+                    if on_status:
+                        on_status(f"\033[1;36m[Tool Action]\033[0m {tool_name}({json.dumps(tool_call.get('arguments', {}))[:80]}...)")
 
-                # Record assistant turn with tool call
-                self.history.append({"role": "assistant", "content": assistant_reply})
+                    # Record assistant turn with tool call
+                    self.history.append({"role": "assistant", "content": assistant_reply})
 
-                # Execute tool
-                tool_output = self._execute_tool(tool_call)
+                    # Execute tool
+                    tool_output = self._execute_tool(tool_call)
 
-                # Feed tool result back to agent
-                self.history.append({
-                    "role": "user",
-                    "content": f"TOOL_OUTPUT for {tool_name}:\n{tool_output}"
-                })
-            else:
-                # No tool call, this is the final answer
-                self.history.append({"role": "assistant", "content": assistant_reply})
-                final_response = assistant_reply
+                    # Feed tool result back to agent
+                    self.history.append({
+                        "role": "user",
+                        "content": f"TOOL_OUTPUT for {tool_name}:\n{tool_output}"
+                    })
+                else:
+                    # No tool call, this is the final answer
+                    self.history.append({"role": "assistant", "content": assistant_reply})
+                    final_response = assistant_reply
+                    if on_text:
+                        on_text(assistant_reply)
+                    break
+
+            if current_turn >= self.max_turns and not final_response:
+                final_response = f"[Turn limit reached] The agent reached the maximum turn limit ({self.max_turns}) without completing the task."
                 if on_text:
-                    on_text(assistant_reply)
-                break
+                    on_text(final_response)
 
-        if current_turn >= self.max_turns and not final_response:
-            final_response = f"[Turn limit reached] The agent reached the maximum turn limit ({self.max_turns}) without completing the task."
-            if on_text:
-                on_text(final_response)
+            # Save session transcript
+            self._save_session()
+            return final_response
+        except BaseException:
+            del self.history[self._turn_start:]
+            self._save_session()
+            raise
+        finally:
+            self._turn_active = False
 
-        # Save session transcript
-        self._save_session()
-        return final_response
+    def abort_current_turn(self) -> bool:
+        """Cleans up session history after an interrupted or canceled turn."""
+        if getattr(self, "_turn_active", False):
+            del self.history[self._turn_start:]
+            self._turn_active = False
+            self._save_session()
+            return True
+        return False
 
     def _save_session(self) -> None:
         try:

@@ -106,3 +106,59 @@ def test_tool_registry():
         secret_res = tools.write_file(".env", "SECRET=123")
         assert "error" in secret_res
         assert "Security restriction" in secret_res["error"]
+
+        # Test consult_architect tool exists and is callable
+        assert hasattr(tools, "consult_architect")
+        assert callable(tools.consult_architect)
+
+
+def test_router_default_local_orchestrator():
+    router = ZeroCostRouter()
+    # Default route should always be local compute (Tier 3)
+    dec = router.select_route("Write a python script to parse CSV")
+    assert dec.selected_tier == ModelTier.TIER_3_LOCAL
+
+    # Even high complexity defaults to local unless explicitly delegated
+    dec_complex = router.select_route("Refactor distributed state machine and fix race conditions")
+    assert dec_complex.selected_tier == ModelTier.TIER_3_LOCAL
+
+    # Explicit delegation to Chief Architect
+    dec_architect = router.select_route("Major migration plan", force_tier="architect")
+    assert dec_architect.selected_tier == ModelTier.TIER_1_PRIMARY
+
+
+def test_runtime_abort_current_turn(monkeypatch):
+    import pytest
+    import triad.agent.runtime as rt
+    from triad.agent.runtime import AgentRuntime
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fake_sess_dir = Path(tmpdir) / "sessions"
+        monkeypatch.setattr(rt, "DEFAULT_SESSION_DIR", fake_sess_dir)
+
+        runtime = AgentRuntime(workspace_root=Path(tmpdir))
+        runtime.history = [{"role": "system", "content": "prompt"}]
+
+        # Idle REPL (no active turn)
+        assert not runtime.abort_current_turn()
+
+        # Simulate KeyboardInterrupt inside run_turn
+        def mock_dispatch(*args, **kwargs):
+            raise KeyboardInterrupt("Simulated user Ctrl+C")
+
+        monkeypatch.setattr(runtime, "_dispatch_waterfall", mock_dispatch)
+
+        with pytest.raises(KeyboardInterrupt):
+            runtime.run_turn("test interrupt")
+
+        # History should be cleanly rolled back to exactly the system prompt
+        assert len(runtime.history) == 1
+        assert runtime.history[0]["role"] == "system"
+        assert not runtime._turn_active
+
+
+def test_consult_architect_secret_filter():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tools = ToolRegistry(workspace_root=Path(tmpdir), auto_approve=True)
+        res = tools.consult_architect("Review this key: sk-ant-api03-12345678901234567890")
+        assert "error" in res
+        assert "Security restriction" in res["error"]

@@ -3018,7 +3018,7 @@ IGNORED_SOURCE_DEPENDENCY_DIR_NAMES = {
     "__pycache__", "build", "dist", ".next", ".turbo", ".tox",
     ".cache", ".mypy_cache", ".ruff_cache", ".claude", ".cursor",
     ".vscode", ".idea", ".vercel", ".hermes", "supabase", ".temp",
-    "android", "ios", "capacitor"
+    "android", "ios", "capacitor", "logs"
 }
 SOURCE_DEPENDENCY_EXTENSIONS = (
     ".py", ".ts", ".js", ".tsx", ".jsx", ".json", ".env",

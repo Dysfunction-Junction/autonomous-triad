@@ -9,6 +9,7 @@ Follows the agy/Claude Code permission model:
 """
 
 import os
+import re
 import glob
 import subprocess
 import fnmatch
@@ -242,27 +243,101 @@ class ToolRegistry:
         except Exception as exc:
             return {"error": f"Failed to search code: {exc}"}
 
+    @staticmethod
+    def _kill_tree(p: subprocess.Popen) -> None:
+        """Kills the process and its full process tree cleanly across platforms."""
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+        else:
+            try:
+                import signal
+                os.killpg(p.pid, signal.SIGKILL)
+            except Exception:
+                pass
+        try:
+            p.communicate(timeout=5)
+        except Exception:
+            pass
+
     def run_command(self, command: str) -> Dict[str, Any]:
-        """Execute a shell command with a safety confirmation prompt."""
+        """Execute a shell command with a safety confirmation prompt and clean interrupt handling."""
         action_msg = f"Execute shell command: \033[1;36m{command}\033[0m"
         if not self._confirm(action_msg):
             return {"error": "User rejected command execution permission."}
 
+        proc = None
+        kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
         try:
-            res = subprocess.run(
+            proc = subprocess.Popen(
                 command,
                 shell=True,
                 cwd=str(self.workspace_root),
-                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=120
+                **kw
             )
+            stdout, stderr = proc.communicate(timeout=120)
             return {
-                "exit_code": res.returncode,
-                "stdout": res.stdout[:15000],
-                "stderr": res.stderr[:5000],
+                "exit_code": proc.returncode,
+                "stdout": stdout[:15000],
+                "stderr": stderr[:5000],
             }
         except subprocess.TimeoutExpired:
+            if proc:
+                self._kill_tree(proc)
             return {"error": "Command timed out after 120 seconds."}
+        except KeyboardInterrupt:
+            if proc:
+                self._kill_tree(proc)
+            raise
         except Exception as exc:
             return {"error": f"Command execution failed: {exc}"}
+
+    def consult_architect(self, query: str, context: Optional[str] = None) -> Dict[str, Any]:
+        """Consults the Chief Architect (Claude 3.7 Sonnet / Codex) for big decisions, system architecture, or stubborn bug diagnoses."""
+        # Comprehensive credential and secret token inspection
+        combined = f"{query} {context or ''}"
+        secret_patterns = [
+            r"\bghp_[A-Za-z0-9]{36}\b",
+            r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",
+            r"\bsk-[A-Za-z0-9_\-]{20,}",
+            r"\bAKIA[0-9A-Z]{16}\b",
+            r"\bxox[baprs]-[A-Za-z0-9-]{10,}",
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        ]
+        for pat in secret_patterns:
+            if re.search(pat, combined):
+                return {"error": "Security restriction: query/context contains sensitive credential tokens."}
+
+        # Cap query and context to 20 KB
+        capped_query = query[:20000]
+        capped_context = context[:20000] if context else ""
+        action_msg = (
+            f"Consult Chief Architect (Claude 3.7 / Codex):\n"
+            f"  Payload: {len(capped_query.encode('utf-8'))} bytes query, {len(capped_context.encode('utf-8'))} bytes context\n"
+            f"  Preview: \033[1;35m{capped_query[:120]}\033[0m"
+        )
+        if not self._confirm(action_msg):
+            return {"error": "User rejected architect consultation permission."}
+
+        try:
+            try:
+                from triad.advisor_manager import query_configured_advisor
+            except ImportError:
+                from advisor_manager import query_configured_advisor
+
+            advice = query_configured_advisor(
+                advisor_name="claude",
+                prompt=capped_query,
+                context=capped_context,
+                mode="architect",
+                timeout=180
+            )
+            return {
+                "advisor": "Chief Architect (Claude 3.7 / Codex)",
+                "advice": advice
+            }
+        except Exception as exc:
+            return {"error": f"Failed to consult Chief Architect: {exc}"}

@@ -151,14 +151,14 @@ class ZeroCostRouter:
         force_tier: Optional[str] = None
     ) -> RoutingDecision:
         """Determines the optimal model tier for the prompt."""
-        # 1. User overrides via flags
-        if force_tier in ("primary", "pro", "heavy"):
+        # 1. User overrides via flags or commands
+        if force_tier in ("primary", "pro", "heavy", "architect", "council"):
             return RoutingDecision(
                 selected_tier=ModelTier.TIER_1_PRIMARY,
                 model_name="claude-3-7-sonnet",
                 difficulty_score=1.0,
                 threshold_c=0.0,
-                reason="Explicit user override: --heavy / --pro",
+                reason="Delegated to Chief Architect (Claude 3.7 Sonnet / Codex)",
                 fallback_chain=[ModelTier.TIER_2_CLOUD_FREE, ModelTier.TIER_3_LOCAL]
             )
         if force_tier in ("free", "nous"):
@@ -180,27 +180,17 @@ class ZeroCostRouter:
                 fallback_chain=[]
             )
 
-        # 2. RouteLLM Scoring & Thresholding
+        # 2. RouteLLM Scoring & Thresholding (Triad Local Orchestrator Default)
         difficulty = self.classifier.score_prompt(prompt, context_length=context_length)
         threshold_c, threshold_reason = self.get_effective_threshold()
 
-        # Decision rule: if difficulty > threshold_c AND primary is healthy -> Tier 1
-        if difficulty > threshold_c and not self.tracker.is_cooling_down("primary"):
-            return RoutingDecision(
-                selected_tier=ModelTier.TIER_1_PRIMARY,
-                model_name="claude-3-7-sonnet",
-                difficulty_score=round(difficulty, 3),
-                threshold_c=round(threshold_c, 3),
-                reason=f"Task complexity ({difficulty:.2f}) > threshold ({threshold_c:.2f}). {threshold_reason}.",
-                fallback_chain=[ModelTier.TIER_2_CLOUD_FREE, ModelTier.TIER_3_LOCAL]
-            )
-
-        # Otherwise route to Cloud Free Tier (Nous) or Local
+        # Default: Triad handles conversation & routine tasks locally.
+        # Chief Architect (Claude) is reserved for big decisions, explicit delegation, or consult_architect tool.
         return RoutingDecision(
-            selected_tier=ModelTier.TIER_2_CLOUD_FREE,
-            model_name="stepfun/step-3.7-flash:free",
+            selected_tier=ModelTier.TIER_3_LOCAL,
+            model_name="qwen3:1.7b",
             difficulty_score=round(difficulty, 3),
             threshold_c=round(threshold_c, 3),
-            reason=f"Task complexity ({difficulty:.2f}) <= threshold ({threshold_c:.2f}). {threshold_reason}. Routed to Cloud Free Tier ($0 cost).",
-            fallback_chain=[ModelTier.TIER_3_LOCAL]
+            reason=f"Handled by Triad locally (port 8080). Task complexity: {difficulty:.2f}. Chief Architect on standby for big decisions.",
+            fallback_chain=[ModelTier.TIER_2_CLOUD_FREE]
         )
