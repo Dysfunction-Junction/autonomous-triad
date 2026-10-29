@@ -636,7 +636,12 @@ def _execute_single_advisor_raw(
         return _execute_openai_http_advisor(advisor, prompt, context, diff, mode, timeout)
     raw_bin = advisor.get("binary_path", "")
     fallback_bin = advisor.get("fallback_binary")
-    bin_path = resolve_binary(raw_bin, fallback_bin, advisor_name=advisor.get("name"))
+    # The Ollama override keeps the canonical name "llama" for circuit keys.
+    # Binary lookup must still use the ollama map, not llama-server.
+    resolve_name = advisor.get("name")
+    if str(fallback_bin or "").lower() == "ollama":
+        resolve_name = "ollama"
+    bin_path = resolve_binary(raw_bin, fallback_bin, advisor_name=resolve_name)
 
     full_prompt = build_advisor_prompt(prompt, context=context, diff=diff, mode=mode)
     flags = list(advisor.get("execution_flags", []))
