@@ -13,7 +13,7 @@ import re
 import signal
 import socket
 import subprocess
-from typing import Optional
+from typing import List, Optional
 
 try:  # psutil is optional; we degrade to OS primitives without it.
     import psutil  # type: ignore

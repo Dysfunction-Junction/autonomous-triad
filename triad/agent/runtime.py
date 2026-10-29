@@ -1,32 +1,34 @@
 """Autonomous Agent Execution Engine & Waterfall Dispatcher.
 
 Orchestrates multi-turn autonomous tool execution loops across the 3-tier zero-cost waterfall:
-  Tier 1: Claude 3.7 Sonnet / Codex (Primary Subscription Limit)
+  Tier 1: Claude Code / Codex (Primary Subscription Limit)
   Tier 2: Nous Research Free (stepfun/step-3.7-flash:free via auth.json)
   Tier 3: Local llama-server (:8080)
 """
 
 import os
 import re
-import sys
 import json
 import time
 import urllib.request
-import urllib.error
-import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Callable
 
 try:
-    from triad.agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, LOCAL_LLAMA_URL
+    from triad.agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, local_llama_v1_url
     from triad.agent.tools import ToolRegistry
     from triad.agent.tracker import RollingWindowTracker
 except ImportError:
-    from agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, LOCAL_LLAMA_URL
+    from agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, local_llama_v1_url
     from agent.tools import ToolRegistry
     from agent.tracker import RollingWindowTracker
 
-DEFAULT_SESSION_DIR = Path.home() / ".triad" / "sessions"
+try:
+    from triad.paths import state_dir
+except ImportError:
+    from paths import state_dir
+
+DEFAULT_SESSION_DIR = state_dir() / "sessions"
 
 
 class AgentRuntime:
@@ -101,7 +103,8 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
         messages: List[Dict[str, str]],
         api_key: Optional[str] = None,
         timeout: int = 120,
-        max_tokens: int = 2048
+        max_tokens: int = 2048,
+        loopback: bool = False,
     ) -> str:
         endpoint = f"{base_url.rstrip('/')}/chat/completions"
         payload = {
@@ -119,48 +122,54 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
             data=json.dumps(payload).encode("utf-8"),
             headers=headers
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            choice = data["choices"][0]
-            msg = choice.get("message") or {}
-            content = msg.get("content") or ""
-            reasoning = msg.get("reasoning_content") or ""
-            if not content and reasoning:
-                content = f"[Model Thought]:\n{reasoning}"
-            return content
+        if loopback:
+            try:
+                from triad.paths import validate_loopback_url
+            except ImportError:
+                from paths import validate_loopback_url
+            validate_loopback_url(base_url)
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=timeout) as resp:
+                raw = resp.read()
+        else:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 - Nous HTTPS API; loopback calls use a proxy-disabled opener
+                raw = resp.read()
+        data = json.loads(raw.decode("utf-8"))
+        choice = data["choices"][0]
+        msg = choice.get("message") or {}
+        content = msg.get("content") or ""
+        reasoning = msg.get("reasoning_content") or ""
+        if not content and reasoning:
+            content = f"[Model Thought]:\n{reasoning}"
+        return content
 
     def _call_tier_primary(self, messages: List[Dict[str, str]]) -> str:
-        """Invokes primary subscription advisor (Claude Code / Codex) via local CLI wrapper."""
-        # Check if claude CLI exists
-        claude_bin = Path.home() / ".local" / "bin" / "claude.exe"
-        if not claude_bin.exists():
-            claude_bin = Path("claude")
+        """Tier 1 goes through the council advisor path: MCP stripping, session cap, circuit, failover.
 
-        # Format conversation transcript into a prompt for claude -p
+        Tool execution stays in the local ToolRegistry. This path does not pass
+        ``--dangerously-skip-permissions``.
+        """
         conversation_text = ""
         for m in messages:
             role = m["role"].upper()
             content = m["content"]
             conversation_text += f"\n--- {role} ---\n{content}\n"
         conversation_text += "\nAssistant response:\n"
-
-        cmd = [str(claude_bin), "-p"]
-        if self.auto_approve:
-            cmd.append("--dangerously-skip-permissions")
-        res = subprocess.run(
-            cmd,
-            input=conversation_text,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=180
-        )
-        if res.returncode != 0:
-            err = res.stderr or res.stdout
-            if "rate limit" in err.lower() or "usage limit" in err.lower() or "429" in err:
-                raise RuntimeError(f"RATE_LIMIT: {err[:200]}")
-            raise RuntimeError(f"CLI Error: {err[:200]}")
-        return res.stdout.strip()
+        try:
+            from triad.advisor_manager import query_configured_advisor
+            from triad.procutil import is_failed_advisor_response
+        except ImportError:
+            from advisor_manager import query_configured_advisor
+            from procutil import is_failed_advisor_response
+        text = query_configured_advisor("claude", conversation_text, mode="passthrough")
+        if is_failed_advisor_response(text):
+            text = query_configured_advisor("codex", conversation_text, mode="passthrough")
+        if is_failed_advisor_response(text):
+            lowered = text.lower()
+            if "rate limit" in lowered or "usage limit" in lowered or "429" in lowered:
+                raise RuntimeError(f"RATE_LIMIT: {text[:200]}")
+            raise RuntimeError(f"CLI Error: {text[:200]}")
+        return text.strip()
 
     def _dispatch_waterfall(
         self,
@@ -195,12 +204,22 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                     return text, tier
 
                 elif tier == ModelTier.TIER_3_LOCAL:
+                    try:
+                        from triad.paths import exceeds_context_budget
+                    except ImportError:
+                        from paths import exceeds_context_budget
+                    transcript = "\n".join(m.get("content", "") for m in messages)
+                    budget = exceeds_context_budget(transcript, max_tokens=1024)
+                    if budget:
+                        decision.reason = budget
+                        raise RuntimeError(budget)
                     text = self._call_http_openai_compatible(
-                        base_url=LOCAL_LLAMA_URL,
+                        base_url=local_llama_v1_url(),
                         model="default",
                         messages=messages,
                         timeout=120,
-                        max_tokens=1024
+                        max_tokens=1024,
+                        loopback=True,
                     )
                     self.tracker.record_request(provider="llama_local", model="qwen3:1.7b")
                     return text, tier

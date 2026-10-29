@@ -10,12 +10,14 @@ Config-driven management and dynamic query routing for advisory models:
 
 import sys
 import os
+import re
 import subprocess
 import json
 import time
 import tempfile
 import shutil
 import threading
+import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple, Generator
@@ -25,7 +27,11 @@ try:
         kill_process_tree, is_failed_advisor_response, classify_advisor_response,
         is_port_open, strip_diff_bloat,
     )
-    from triad.paths import expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH
+    from triad.paths import (
+        expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH,
+        AGY_PATH, LLAMA_SERVER_PATH, local_backend, local_llm_port, llama_cpp_url,
+        exceeds_context_budget, state_dir, write_state_file,
+    )
     from triad.circuit import (
         is_circuit_open, circuit_remaining, circuit_reason,
         record_success, record_failure,
@@ -35,7 +41,11 @@ except ImportError:  # flat install (~/.agents/triad) without the package prefix
         kill_process_tree, is_failed_advisor_response, classify_advisor_response,
         is_port_open, strip_diff_bloat,
     )
-    from paths import expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH
+    from paths import (
+        expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH,
+        AGY_PATH, LLAMA_SERVER_PATH, local_backend, local_llm_port, llama_cpp_url,
+        exceeds_context_budget, state_dir, write_state_file,
+    )
     from circuit import (
         is_circuit_open, circuit_remaining, circuit_reason,
         record_success, record_failure,
@@ -50,8 +60,12 @@ if hasattr(sys.stderr, "reconfigure"):
 TRIAD_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = TRIAD_DIR / "advisors.json"
 DEFAULT_EMPTY_MCP = TRIAD_DIR / "empty-mcp.json"
-LOGS_DIR = TRIAD_DIR / "logs"
+LOGS_DIR = state_dir() / "logs"
 ADVISOR_CALLS_LOG = LOGS_DIR / "advisor_calls.jsonl"
+_LEGACY_CALL_LOGS = (
+    TRIAD_DIR / "logs" / "advisor_calls.jsonl",
+    Path.home() / ".agents" / "triad" / "logs" / "advisor_calls.jsonl",
+)
 
 LIMIT_MARKERS = ("session limit", "rate limit", "usage limit")
 TEST_ROLES = frozenset({"test", "mock"})
@@ -97,8 +111,9 @@ def rank_advisors_for_task(advisors: List[Dict[str, Any]], task: Optional[str] =
     order_map = {name: idx for idx, name in enumerate(preferred_order)}
 
     def sort_key(adv: Dict[str, Any]) -> Tuple[int, int]:
-        name = str(adv.get("name") or "").lower()
-        task_rank = order_map.get(name, 90)
+        names = [str(adv.get("name") or "").lower()]
+        names.extend(str(alias).lower() for alias in (adv.get("aliases") or []))
+        task_rank = min(order_map.get(name, 90) for name in names)
         return (task_rank, _safe_priority(adv))
 
     return sorted(advisors, key=sort_key)
@@ -115,6 +130,52 @@ def is_test_advisor(advisor: Dict[str, Any]) -> bool:
     return name == "mock" or role in TEST_ROLES
 
 
+def is_interactive_advisor(advisor: Dict[str, Any]) -> bool:
+    return str(advisor.get("role") or "").lower() == "interactive"
+
+
+def advisor_can_judge(advisor: Dict[str, Any]) -> bool:
+    """Production advisors judge. A strengths map requires strengths.judge > 0.
+
+    An advisor with no strengths map can judge only on the subprocess transport,
+    which keeps the local HTTP model out of the judge seat.
+    """
+    if str(advisor.get("role") or "production").lower() != "production":
+        return False
+    strengths = advisor.get("strengths")
+    if isinstance(strengths, dict):
+        try:
+            return float(strengths.get("judge", 0) or 0) > 0
+        except (TypeError, ValueError):
+            return False
+    return str(advisor.get("transport") or "subprocess") != "openai_http"
+
+
+def effective_advisor(advisor: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply ``backend_overrides[local_backend()]`` before readiness, ranking, and execution.
+
+    A legacy ``ollama_override`` block is read as ``backend_overrides.ollama``.
+    """
+    overrides = advisor.get("backend_overrides")
+    if not isinstance(overrides, dict):
+        overrides = {}
+    else:
+        overrides = dict(overrides)
+    legacy = advisor.get("ollama_override")
+    if isinstance(legacy, dict) and "ollama" not in overrides:
+        overrides["ollama"] = legacy
+    block = overrides.get(local_backend())
+    if not isinstance(block, dict):
+        return advisor
+    merged = {
+        k: v for k, v in advisor.items()
+        if k not in ("transport", "model", "ollama_override", "backend_overrides")
+    }
+    merged.update(block)
+    merged["name"] = advisor.get("name")
+    return merged
+
+
 def _resolve_readiness_port(advisor: Dict[str, Any]) -> Optional[int]:
     raw = advisor.get("readiness_port")
     if raw is None or raw == "":
@@ -123,6 +184,8 @@ def _resolve_readiness_port(advisor: Dict[str, Any]) -> Optional[int]:
         token = raw.strip()
         if token in ("{port_ollama}", "ollama"):
             return PORT_OLLAMA
+        if token == "{port_local_llm}":
+            return local_llm_port()
         if token.isdigit():
             return int(token)
         return None
@@ -135,11 +198,14 @@ def _resolve_readiness_port(advisor: Dict[str, Any]) -> Optional[int]:
 def advisor_is_ready(advisor: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Cheap preflight: skip advisors whose local daemon is down or whose binary
-    cannot be resolved, instead of burning the full subprocess timeout.
+    cannot be resolved,     instead of burning the full subprocess timeout.
     """
+    advisor = effective_advisor(advisor)
     port = _resolve_readiness_port(advisor)
     if port is not None and not is_port_open("127.0.0.1", port, timeout=0.2):
         return False, f"port {port} closed"
+    if advisor.get("transport") == "openai_http":
+        return True, ""
     raw = advisor.get("binary_path", "")
     fallback = advisor.get("fallback_binary")
     if not raw and not fallback:
@@ -188,8 +254,16 @@ def record_advisor_call(advisor_name: str, mode: str, elapsed_seconds: float, st
     if not _telemetry_enabled():
         return
     try:
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(ADVISOR_CALLS_LOG, "a", encoding="utf-8") as f:
+        path = write_state_file("logs/advisor_calls.jsonl")
+        if not path.exists():
+            for old in _LEGACY_CALL_LOGS:
+                try:
+                    if old.is_file() and old.resolve() != path.resolve():
+                        path.write_bytes(old.read_bytes())
+                        break
+                except OSError:
+                    continue
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps({
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "advisor": advisor_name,
@@ -204,6 +278,8 @@ def record_advisor_call(advisor_name: str, mode: str, elapsed_seconds: float, st
 
 def build_advisor_prompt(prompt: str, context: Optional[str] = None, diff: Optional[str] = None, mode: str = "general") -> str:
     """Construct structured advisor prompt based on query mode."""
+    if mode == "passthrough":
+        return prompt or ""
     if diff:
         diff = strip_diff_bloat(diff)
 
@@ -258,15 +334,27 @@ def load_config(config_path: Optional[Union[str, Path]] = None, include_overlay:
     if not include_overlay or os.environ.get("TRIAD_NO_OVERLAY") == "1":
         return data
 
-    # Check for local overlays strictly within user ~/.agents boundary to preserve machine-local registrations
+    # State dir first, then the two historical overlay paths.
     overlay_candidates = [
+        state_dir() / "advisors.local.json",
         Path.home() / ".agents" / "triad" / "advisors.local.json",
         Path.home() / ".agents" / "advisors.local.json",
     ]
+
     def _nm(a):
         return str(a.get("name") or "").lower() if isinstance(a, dict) else ""
 
-    seen = {_nm(a) for a in data["advisors"]} - {""}
+    alias_to_canon: Dict[str, str] = {}
+    index_by_canon: Dict[str, int] = {}
+    for i, adv in enumerate(data["advisors"]):
+        canon = _nm(adv)
+        if not canon:
+            continue
+        alias_to_canon[canon] = canon
+        for alias in adv.get("aliases") or []:
+            alias_to_canon[str(alias).lower()] = canon
+        index_by_canon[canon] = i
+
     for o in dict.fromkeys(c.resolve() for c in overlay_candidates if c.exists()):
         if o == path or not o.is_file():
             continue
@@ -275,10 +363,25 @@ def load_config(config_path: Optional[Union[str, Path]] = None, include_overlay:
         except (OSError, ValueError):
             continue
         for adv in _adv_list(o_data):
+            if not isinstance(adv, dict):
+                continue
             n = _nm(adv)
-            if n and n not in seen:
-                data["advisors"].append(adv)
-                seen.add(n)
+            if not n:
+                continue
+            canon = alias_to_canon.get(n)
+            if canon:
+                # An overlay named by alias updates the canonical advisor instead of adding a second one.
+                base = data["advisors"][index_by_canon[canon]]
+                merged = dict(base)
+                for key, value in adv.items():
+                    if key != "name":
+                        merged[key] = value
+                merged["name"] = base.get("name")
+                data["advisors"][index_by_canon[canon]] = merged
+                continue
+            data["advisors"].append(adv)
+            alias_to_canon[n] = n
+            index_by_canon[n] = len(data["advisors"]) - 1
     return data
 
 
@@ -306,7 +409,7 @@ def get_advisors(
     if enabled_only:
         advisors = [adv for adv in advisors if adv.get("enabled", True)]
     if production_only:
-        advisors = [adv for adv in advisors if not is_test_advisor(adv)]
+        advisors = [adv for adv in advisors if not is_test_advisor(adv) and not is_interactive_advisor(adv)]
     return sorted(advisors, key=lambda x: x.get("priority", 999))
 
 
@@ -322,7 +425,9 @@ def get_active_advisor(name: Optional[str] = None, config_path: Optional[Union[s
     if name and name.lower() not in ("auto", "none"):
         target = "claude" if name.lower() == "bare_single" else name.lower()
         for adv in advisors:
-            if adv.get("name", "").lower() == target:
+            canon = str(adv.get("name") or "").lower()
+            aliases = [str(alias).lower() for alias in (adv.get("aliases") or [])]
+            if target == canon or target in aliases:
                 return adv
         return None
 
@@ -386,17 +491,24 @@ def resolve_binary(binary_path: str, fallback_binary: Optional[str] = None, advi
         "claude": CLAUDE_PATH,
         "codex": CODEX_PATH,
         "ollama": OLLAMA_PATH,
+        "llama": LLAMA_SERVER_PATH,
+        "llama-server": LLAMA_SERVER_PATH,
+        "antigravity": AGY_PATH,
         "hermes": HERMES_PATH,
     }
 
-    # 1. Explicit environment override
+    # 1. Explicit environment override. Antigravity's historical variable is TRIAD_AGY_PATH.
     if name:
-        env_var = f"TRIAD_{name.upper()}_PATH"
-        env_override = os.environ.get(env_var, "").strip()
-        if env_override:
-            res_env = _resolve_one(env_override)
-            if res_env:
-                return res_env
+        env_names = []
+        if name == "antigravity":
+            env_names.append("TRIAD_AGY_PATH")
+        env_names.append(f"TRIAD_{name.upper()}_PATH")
+        for env_var in env_names:
+            env_override = os.environ.get(env_var, "").strip()
+            if env_override:
+                res_env = _resolve_one(env_override)
+                if res_env:
+                    return res_env
 
     # 2. Configured binary_path
     if binary_path:
@@ -457,6 +569,57 @@ def remove_advisor(advisor_name: str, config_path: Optional[Union[str, Path]] = 
     return False
 
 
+def _execute_openai_http_advisor(
+    advisor: Dict[str, Any],
+    prompt: str,
+    context: Optional[str],
+    diff: Optional[str],
+    mode: str,
+    timeout: int,
+) -> str:
+    """Query llama-server over /v1/chat/completions. Loopback only, no system proxy."""
+    advisor_name = advisor.get("name", "unknown")
+    display_name = advisor.get("display_name", advisor_name)
+    full_prompt = build_advisor_prompt(prompt, context=context, diff=diff, mode=mode)
+    started = time.monotonic()
+    try:
+        max_tokens = int(advisor.get("max_tokens") or 1024)
+    except (TypeError, ValueError):
+        max_tokens = 1024
+    try:
+        url = llama_cpp_url() + "/v1/chat/completions"
+    except ValueError as exc:
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "error", len(full_prompt))
+        return f"[Error calling {display_name}: {exc}]"
+    budget = exceeds_context_budget(full_prompt, max_tokens=max_tokens)
+    if budget:
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "error", len(full_prompt))
+        return f"[Error: {budget}]"
+    try:
+        body = json.dumps({
+            "model": advisor.get("model", "qwen3:1.7b"),
+            "stream": False,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "user", "content": full_prompt + " /no_think"}],
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=timeout) as resp:
+            envelope = json.loads(resp.read().decode("utf-8", errors="replace"))
+        text = str(((envelope.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "ok" if text else "empty", len(full_prompt))
+        return text
+    except TimeoutError:
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "timeout", len(full_prompt))
+        return f"[Error: {display_name} timed out after {timeout}s]"
+    except Exception as exc:
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "error", len(full_prompt))
+        return f"[Error calling {display_name}: {exc}]"
+
+
 def _execute_single_advisor_raw(
     advisor: Dict[str, Any],
     prompt: str,
@@ -468,6 +631,9 @@ def _execute_single_advisor_raw(
     task: Optional[str] = None,
 ) -> str:
     """Execute a single advisor using its declared configuration."""
+    advisor = effective_advisor(advisor)
+    if advisor.get("transport") == "openai_http":
+        return _execute_openai_http_advisor(advisor, prompt, context, diff, mode, timeout)
     raw_bin = advisor.get("binary_path", "")
     fallback_bin = advisor.get("fallback_binary")
     bin_path = resolve_binary(raw_bin, fallback_bin, advisor_name=advisor.get("name"))
@@ -869,6 +1035,7 @@ def query_configured_advisor(
 
         # Rank advisors dynamically based on task efficiency & model suitability
         advisors = rank_advisors_for_task(advisors, task=task)
+        advisors = [adv for adv in advisors if not is_interactive_advisor(adv)]
 
         fail_notes = []
         skipped = []
@@ -893,7 +1060,7 @@ def query_configured_advisor(
                     header = f"[Advisor Auto-Failover: Preceding advisors failed ({prior}). Active Advisor: {adv.get('display_name')}]\n\n"
                     return header + res
                 return res
-            fail_notes.append(f"{name}: {res.strip()[:60]}")
+            fail_notes.append(f"{name}: {' '.join(res.split())[:60]}")
 
         # Circuit protection: if every ready advisor was skipped by an open circuit,
         # respect the cooldown until expiry to prevent retry stampedes, unless force_probe is explicitly requested.
@@ -907,7 +1074,7 @@ def query_configured_advisor(
                 if not is_failed_advisor_response(res):
                     header = f"[Advisor Circuit Fallback: Preceding advisors in cooldown. Active Advisor: {best_fallback.get('display_name')}]\n\n"
                     return header + res
-                fail_notes.append(f"{name} (fallback): {res.strip()[:60]}")
+                fail_notes.append(f"{name} (fallback): {' '.join(res.split())[:60]}")
             else:
                 earliest_adv = min(circuit_skipped, key=lambda a: circuit_remaining(str(a.get("name") or "")))
                 rem = int(circuit_remaining(str(earliest_adv.get("name") or "")))

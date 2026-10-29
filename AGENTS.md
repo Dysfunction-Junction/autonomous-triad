@@ -32,4 +32,4 @@ Mesh launch id `autonomous-triad`, port 8789, runner `python`, script `triad.ser
 | [`docs/BLUEPRINT.md`](docs/BLUEPRINT.md) | longer design notes |
 | [`pyproject.toml`](pyproject.toml) | package metadata and tool entry points |
 
-This checkout is the sibling advisor service. `sovereign-exocortex/packages/triad` is a different tree inside the gateway repo. Device tasks live in the `hermes-api` checkout, not here.
+This checkout is the canonical Triad source. `sovereign-exocortex/packages/triad` is a read-only vendor of one pinned commit of this tree. Edit Triad here. Update the vendor with `scripts/update-triad` in the exocortex repo. Do not edit the vendored copy in place. Device tasks live in the `hermes-api` checkout, not here.

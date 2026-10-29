@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from triad.bench.docker_harness import (
@@ -12,7 +13,9 @@ from triad.bench.docker_harness import (
     checkout_argv,
     destination_bare_repo,
     django_test_labels,
+    DOCKER_SANDBOX_ARGS,
     docker_outcome,
+    cleanup_timed_out_container,
     native_test_argv,
     resolve_bare_repo,
     runner_executed,
@@ -20,6 +23,25 @@ from triad.bench.docker_harness import (
 
 
 class TestDockerHarness(unittest.TestCase):
+    @patch("triad.bench.docker_harness.subprocess.run")
+    def test_timeout_cleanup_reports_failed_kill_and_remove(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 1, "", "kill denied"),
+            subprocess.CompletedProcess([], 1, "", "container still running"),
+            subprocess.CompletedProcess([], 1, "", "remove denied"),
+        ]
+        self.assertIn("remove denied", cleanup_timed_out_container("triad-eval-test"))
+        self.assertEqual(run.call_count, 3)
+
+    @patch("triad.bench.docker_harness.subprocess.run")
+    def test_timeout_cleanup_confirms_force_removal(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 1, "", "kill denied"),
+            subprocess.CompletedProcess([], 1, "", "wait failed"),
+            subprocess.CompletedProcess([], 0, "triad-eval-test", ""),
+        ]
+        self.assertIsNone(cleanup_timed_out_container("triad-eval-test"))
+
     def test_dirname_includes_owner(self):
         self.assertEqual(bare_repo_dirname("django/django"), "django__django.git")
         self.assertEqual(bare_repo_dirname("other/django"), "other__django.git")
@@ -88,15 +110,25 @@ class TestDockerHarness(unittest.TestCase):
 
     def test_docker_outcome_trusts_only_a_clean_pass(self):
         self.assertEqual(docker_outcome(0, "OK\nRan 1 test in 0.1s"), "pass")
-        self.assertEqual(docker_outcome(0, "OK (skipped=1)\nRan 1 test in 0.1s"), "fallback")
+        self.assertEqual(docker_outcome(0, "OK (skipped=0)\nRan 1 test in 0.1s"), "pass")
+        self.assertEqual(docker_outcome(0, "OK (skipped=1)\nRan 1 test in 0.1s"), "incomplete")
+        self.assertEqual(docker_outcome(0, "1 passed, 1 skipped"), "incomplete")
+        self.assertEqual(docker_outcome(0, "Ran 0 tests in 0.1s\nOK"), "unavailable")
         self.assertEqual(
             docker_outcome(1, "FAILED (failures=1)\nRan 1 test in 0.1s"),
-            "fallback",
+            "failed",
         )
+        self.assertEqual(docker_outcome(2, "ERROR: file or directory not found"), "unavailable")
+
+    def test_docker_sandbox_restricts_network_and_privileges(self):
+        self.assertIn("--network=none", DOCKER_SANDBOX_ARGS)
+        self.assertIn("--cap-drop=ALL", DOCKER_SANDBOX_ARGS)
+        self.assertIn("--security-opt=no-new-privileges", DOCKER_SANDBOX_ARGS)
 
     def test_runner_executed_ignores_harness_failures(self):
         self.assertFalse(runner_executed(1, "ImportError: No module named django"))
         self.assertFalse(runner_executed(2, "ERROR: file or directory not found"))
+        self.assertFalse(runner_executed(0, "Ran 0 tests in 0.1s\nOK"))
         self.assertTrue(runner_executed(1, "FAIL: test_ascii\n\nFAILED (failures=1)\nRan 1 test in 0.1s"))
         self.assertTrue(runner_executed(0, "OK\nRan 1 test in 0.1s"))
         self.assertFalse(
@@ -129,7 +161,8 @@ class TestDockerHarness(unittest.TestCase):
                 check=True, capture_output=True,
             )
             argv = checkout_argv(checkout, commit)
-            self.assertLess(argv.index("--detach"), argv.index("--end-of-options"))
+            self.assertNotIn("--end-of-options", argv)
+            self.assertIn(commit, argv)
             checked = subprocess.run(argv, capture_output=True, text=True)
             self.assertEqual(checked.returncode, 0, checked.stderr)
             head = subprocess.run(
@@ -137,6 +170,17 @@ class TestDockerHarness(unittest.TestCase):
                 check=True, capture_output=True, text=True,
             ).stdout.strip()
             self.assertEqual(head, commit)
+
+
+    def test_checkout_argv_rejects_non_hex_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp)
+            with self.assertRaises(ValueError):
+                checkout_argv(checkout, "--upload-pack=touch /tmp/pwn")
+            with self.assertRaises(ValueError):
+                checkout_argv(checkout, "HEAD")
+            with self.assertRaises(ValueError):
+                checkout_argv(checkout, "not-a-sha!")
 
 
 class TestClaudeJudgesCodex(unittest.TestCase):

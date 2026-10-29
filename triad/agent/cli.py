@@ -12,14 +12,13 @@ import sys
 import time
 import argparse
 import urllib.request
-from pathlib import Path
 
 try:
     from triad.agent.runtime import AgentRuntime
-    from triad.agent.router import ZeroCostRouter, LOCAL_LLAMA_URL
+    from triad.agent.router import local_llama_v1_url
 except ImportError:
     from agent.runtime import AgentRuntime
-    from agent.router import ZeroCostRouter, LOCAL_LLAMA_URL
+    from agent.router import local_llama_v1_url
 
 
 def read_piped_stdin() -> str:
@@ -54,7 +53,7 @@ def print_banner():
  |_   _| __(_) __ _  __| |   Triad Terminal Agent
    | || '__| |/ _` |/ _` |   Local Orchestrator & Autonomous Engineer
    | || |  | | (_| | (_| |   Engine: Local llama-server (:8080)
-   |_||_|  |_|\__,_|\__,_|   Chief Architect: Claude 3.7 / Codex (On-Demand)
+   |_||_|  |_|\__,_|\__,_|   Chief Architect: Claude Code / Codex (On-Demand)
 """
     print(f"\033[1;36m{banner}\033[0m")
     print("  Talk to \033[1;32mTriad\033[0m directly. Chief Architect is on standby for big decisions.")
@@ -70,12 +69,14 @@ def print_status(runtime: AgentRuntime):
     thresh, reason = runtime.router.get_effective_threshold()
 
     # Probe local llama server health
+    local_url = local_llama_v1_url()
     local_health = "OFFLINE"
     try:
-        req = urllib.request.Request(f"{LOCAL_LLAMA_URL.rstrip('/')}/health", headers={"User-Agent": "triad-agent"})
-        with urllib.request.urlopen(req, timeout=1.5) as r:
+        req = urllib.request.Request(f"{local_url.rstrip('/')}/health", headers={"User-Agent": "triad-agent"})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=1.5) as r:
             if r.status == 200:
-                local_health = "ONLINE / HEALTHY (Port 8080)"
+                local_health = "ONLINE / HEALTHY"
     except Exception:
         pass
 
@@ -83,7 +84,7 @@ def print_status(runtime: AgentRuntime):
     print(f"  Primary 5-Hour Utilization: {util:.1f}% ({turns} turns, {tokens} tokens)")
     print(f"  Primary Cooldown Status:    {'COOLING DOWN' if cooling else 'ACTIVE / READY'}")
     print(f"  RouteLLM Threshold (c):     {thresh:.2f} ({reason})")
-    print(f"  Local Llama Server:         {LOCAL_LLAMA_URL} ({local_health})")
+    print(f"  Local Llama Server:         {local_url} ({local_health})")
     print(f"  Active Session ID:          {runtime.session_id}")
     print(f"  Workspace:                  {runtime.workspace_root}\n")
 
@@ -115,7 +116,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--heavy", "--pro", "--architect", "--council",
         dest="force_heavy",
         action="store_true",
-        help="Delegate to Chief Architect (Claude 3.7 Sonnet / Codex)."
+        help="Delegate to Chief Architect (Claude Code / Codex)."
     )
     parser.add_argument(
         "--free", "--nous",
@@ -222,7 +223,7 @@ def main(argv=None):
             continue
         elif lowered == "/help":
             print("\nCommands:")
-            print("  \033[1m/architect <query>\033[0m  Delegate a big decision directly to Claude 3.7 / Codex")
+            print("  \033[1m/architect <query>\033[0m  Delegate a big decision directly to Claude Code / Codex")
             print("  \033[1m/cancel\033[0m             Cancel or clear active turn state")
             print("  \033[1m/status\033[0m             Show 5-hour quota and local engine health")
             print("  \033[1m/clear\033[0m              Reset session conversation history")

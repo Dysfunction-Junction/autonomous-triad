@@ -9,9 +9,24 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 
-DEFAULT_LEDGER_PATH = Path.home() / ".triad" / "usage_ledger.json"
+def _default_ledger_path() -> Path:
+    try:
+        from triad.paths import write_state_file
+    except ImportError:
+        from paths import write_state_file
+    path = write_state_file("usage_ledger.json")
+    legacy = Path.home() / ".triad" / "usage_ledger.json"
+    try:
+        if not path.exists() and legacy.is_file() and legacy.resolve() != path.resolve():
+            path.write_bytes(legacy.read_bytes())
+    except OSError:
+        pass
+    return path
+
+
+DEFAULT_LEDGER_PATH = _default_ledger_path()
 FIVE_HOURS_SECONDS = 18000  # 5 hours * 3600s
 MAX_PRIMARY_TURNS_PER_WINDOW = 45
 MAX_PRIMARY_TOKENS_PER_WINDOW = 120_000

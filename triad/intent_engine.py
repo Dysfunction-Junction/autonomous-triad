@@ -17,9 +17,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Iterable, Pattern, List, Tuple
 
 try:
-    from triad.paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA
+    from triad.paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, local_llm_port
 except ImportError:
-    from paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA
+    from paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, local_llm_port
 
 # Ensure UTF-8 console output
 if hasattr(sys.stdout, "reconfigure"):
@@ -33,7 +33,7 @@ class IntentClassification:
     confidence: float         # 0.0 to 1.0
     reason: str               # Explanatory rationale for the classification
     suggested_mode: str       # review_diff, architect, debug, gate, doctor, general, scraping, browsing, reasoning
-    suggested_engine: str     # auto, competition, hermes, pieces, memory, ollama
+    suggested_engine: str     # auto, competition, hermes, pieces, memory, llama
     high_stakes: bool = False # Flagged if touching auth, security, crypto, migrations
     task_category: str = "general" # architecture, reasoning, scraping, browsing, coding, micro, mobile, memory
     suggested_model_tier: str = "tier_1_subscription" # tier_0_local, tier_0_or_flash, local_tools_or_slm, tier_1_subscription, tier_2_dual_competition
@@ -272,12 +272,12 @@ def resolve_efficiency_profile(intent: str, high_stakes: bool = False) -> Tuple[
     """
     if intent in ("ARCHITECT",):
         tier = "tier_2_dual_competition" if high_stakes else "tier_1_subscription"
-        rationale = "System architecture and structural invariants routed to Claude 3.7 Sonnet / Codex for maximum reasoning depth."
+        rationale = "System architecture and structural invariants routed to Claude Code / Codex for maximum reasoning depth."
         return ("architecture", tier, rationale)
 
     if intent in ("REASONING",):
         tier = "tier_2_dual_competition" if high_stakes else "tier_1_subscription"
-        rationale = "Formal algorithmic logic, state machines, and concurrency proofs routed to OpenAI Codex (gpt-6-astra) / Claude 3.7."
+        rationale = "Formal algorithmic logic, state machines, and concurrency proofs routed to OpenAI Codex / Claude Code."
         return ("reasoning", tier, rationale)
 
     if intent in ("SCRAPE",):
@@ -550,9 +550,9 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
         return IntentClassification(
             intent="MICRO",
             confidence=0.94,
-            reason="Low-complexity micro-task routed to Tier-0 local SLM (port 11434)",
+            reason="Low-complexity micro-task routed to Tier-0 local SLM (llama.cpp; Ollama when TRIAD_LOCAL_BACKEND=ollama)",
             suggested_mode="general",
-            suggested_engine="ollama",
+            suggested_engine="llama",
             high_stakes=False,
             task_category=cat,
             suggested_model_tier=tier,
@@ -675,7 +675,7 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
                 return
             if args is not None:
                 existing_ctx = getattr(args, "context", "") or ""
-                setattr(args, "context", (existing_ctx + f"\nDiscovered local files:\n" + "\n".join(paths[:10])).strip())
+                setattr(args, "context", (existing_ctx + "\nDiscovered local files:\n" + "\n".join(paths[:10])).strip())
         else:
             print(f"[Triad Local Browser]: No matching file paths found in workspace for query: '{raw_prompt.strip()}'.")
             if is_pure_locator:
@@ -698,9 +698,9 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
             if getattr(args, "task", "auto") in ("auto", None, ""):
                 setattr(args, "task", classification.task_category)
             if hasattr(args, "engine") and getattr(args, "engine", "auto") == "auto":
-                if classification.suggested_engine == "ollama":
-                    if triad_engine.is_port_open("127.0.0.1", PORT_OLLAMA):
-                        setattr(args, "engine", "ollama")
+                if classification.suggested_engine in ("llama", "ollama", "local"):
+                    if triad_engine.is_port_open("127.0.0.1", local_llm_port()):
+                        setattr(args, "engine", "llama")
                     else:
                         setattr(args, "engine", "auto")
                 elif classification.suggested_engine != "auto":

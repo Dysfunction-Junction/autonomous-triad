@@ -1,8 +1,6 @@
 """Unit tests for Triad Agent, RouteLLM Router, Quota Tracker, and Tools."""
 
-import os
 import tempfile
-import time
 from pathlib import Path
 
 from triad.agent.tracker import RollingWindowTracker, DEFAULT_SOFT_LIMIT
@@ -112,19 +110,25 @@ def test_tool_registry():
         assert callable(tools.consult_architect)
 
 
-def test_router_default_local_orchestrator():
+def test_router_default_local_orchestrator(monkeypatch):
+    monkeypatch.setattr("triad.paths.llama_n_ctx", lambda: 2048)
     router = ZeroCostRouter()
-    # Default route should always be local compute (Tier 3)
+    # Short turns stay on the local tier. Score-based escalation is Phase 2.1.
     dec = router.select_route("Write a python script to parse CSV")
     assert dec.selected_tier == ModelTier.TIER_3_LOCAL
 
-    # Even high complexity defaults to local unless explicitly delegated
+    # High complexity still starts local unless the caller delegates or the context budget is exceeded.
     dec_complex = router.select_route("Refactor distributed state machine and fix race conditions")
     assert dec_complex.selected_tier == ModelTier.TIER_3_LOCAL
 
     # Explicit delegation to Chief Architect
     dec_architect = router.select_route("Major migration plan", force_tier="architect")
     assert dec_architect.selected_tier == ModelTier.TIER_1_PRIMARY
+
+    # A prompt that cannot fit 90% of n_ctx skips the local tier and records why.
+    dec_budget = router.select_route("x" * 20000)
+    assert dec_budget.selected_tier == ModelTier.TIER_2_CLOUD_FREE
+    assert "context budget" in dec_budget.reason
 
 
 def test_runtime_abort_current_turn(monkeypatch):

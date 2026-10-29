@@ -22,18 +22,17 @@ except ImportError:
     from procutil import is_failed_advisor_response, strip_diff_bloat
     from circuit import is_circuit_open
 
-# Ensure logs directory exists (fallback to user-writable directory in site-packages)
-LOGS_DIR = Path.home() / ".agents" / "triad" / "logs"
 try:
-    _candidate = Path(__file__).resolve().parent / "logs"
-    _candidate.mkdir(parents=True, exist_ok=True)
-    LOGS_DIR = _candidate
-except (OSError, PermissionError):
-    try:
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    from triad.paths import state_dir, write_state_file
+except ImportError:
+    from paths import state_dir, write_state_file
+
+LOGS_DIR = state_dir() / "logs"
 COUNCIL_SESSIONS_LOG = LOGS_DIR / "council_sessions.jsonl"
+_LEGACY_COUNCIL_LOGS = (
+    Path(__file__).resolve().parent / "logs" / "council_sessions.jsonl",
+    Path.home() / ".agents" / "triad" / "logs" / "council_sessions.jsonl",
+)
 
 DEFAULT_ADVISOR_PAIR: Tuple[str, str] = ("claude", "codex")
 DEFAULT_LABELS = {"claude": "Claude Code", "codex": "OpenAI Codex"}
@@ -472,8 +471,16 @@ def query_competition_council(
 
     # 3. Log to telemetry file
     try:
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(COUNCIL_SESSIONS_LOG, "a", encoding="utf-8") as f:
+        path = write_state_file("logs/council_sessions.jsonl")
+        if not path.exists():
+            for old in _LEGACY_COUNCIL_LOGS:
+                try:
+                    if old.is_file() and old.resolve() != path.resolve():
+                        path.write_bytes(old.read_bytes())
+                        break
+                except OSError:
+                    continue
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(session_data) + "\n")
     except Exception as e:
         print(f"[Warning: Failed to log council session: {e}]", file=sys.stderr)

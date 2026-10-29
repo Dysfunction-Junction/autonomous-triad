@@ -110,11 +110,38 @@ def circuits_enabled() -> bool:
     return os.environ.get("TRIAD_CIRCUIT", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
-def circuit_state_path() -> Path:
+def _circuit_override_path() -> Optional[Path]:
     override = os.environ.get("TRIAD_CIRCUIT_PATH", "").strip()
-    if override:
-        return Path(os.path.expanduser(os.path.expandvars(override)))
-    return Path.home() / ".agents" / "triad" / "logs" / "circuit_state.json"
+    if not override:
+        return None
+    return Path(os.path.expanduser(os.path.expandvars(override)))
+
+
+def circuit_state_path() -> Path:
+    """Write path. ``TRIAD_CIRCUIT_PATH`` wins; otherwise ``$TRIAD_STATE_DIR/circuit_state.json``."""
+    override = _circuit_override_path()
+    if override is not None:
+        return override
+    try:
+        from triad.paths import write_state_file
+    except ImportError:
+        from paths import write_state_file
+    return write_state_file("circuit_state.json")
+
+
+def circuit_read_path() -> Path:
+    """Read path. Uses the legacy file only when the new file is absent and no override is set."""
+    override = _circuit_override_path()
+    if override is not None:
+        return override
+    try:
+        from triad.paths import read_state_file
+    except ImportError:
+        from paths import read_state_file
+    return read_state_file(
+        "circuit_state.json",
+        Path.home() / ".agents" / "triad" / "logs" / "circuit_state.json",
+    )
 
 
 def cooldown_seconds(kind: str) -> int:
@@ -167,7 +194,7 @@ def _load() -> Dict[str, Any]:
     # Writes are atomic via tempfile + os.replace; lockless reads eliminate
     # multi-round-trip lock contention on status and routing checks.
     with _CIRCUIT_LOCK:
-        return _load_unlocked(circuit_state_path())
+        return _load_unlocked(circuit_read_path())
 
 
 def _save(data: Dict[str, Any]) -> None:
@@ -224,7 +251,7 @@ def record_success(advisor_name: str, track_circuit: bool = True, call_start_tim
         if not acquired:
             print(f"[Triad Circuit Warning] Could not acquire circuit lock to record success for {advisor_name}; skipping update", file=sys.stderr)
             return  # Skip best-effort update on contention; never mutate unlocked
-        data = _load_unlocked(path)
+        data = _load_unlocked(circuit_read_path())
         prev = data.get(key) if isinstance(data.get(key), dict) else {}
 
         now = time.time()
@@ -285,7 +312,7 @@ def record_failure(advisor_name: str, kind: str, track_circuit: bool = True, cal
         if not acquired:
             print(f"[Triad Circuit Warning] Could not acquire circuit lock to record failure for {advisor_name}; skipping update", file=sys.stderr)
             return  # Skip best-effort update on contention; never mutate unlocked
-        data = _load_unlocked(path)
+        data = _load_unlocked(circuit_read_path())
         prev = data.get(key) if isinstance(data.get(key), dict) else {}
 
         now = time.time()
@@ -358,7 +385,7 @@ def reset_circuit(advisor_name: Optional[str] = None) -> None:
         if not acquired:
             return
         if advisor_name:
-            data = _load_unlocked(path)
+            data = _load_unlocked(circuit_read_path())
             data.pop(advisor_name.lower(), None)
             _save_unlocked(path, data)
             return

@@ -40,14 +40,20 @@ try:
     from triad.competition import query_competition_council, COUNCIL_SESSIONS_LOG
     from triad.intent_engine import classify_intent
     from triad.procutil import is_port_open, clean_git_env
-    from triad.paths import MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER
+    from triad.paths import (
+        MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, local_llm_port, PORT_TRIAD_SERVER,
+        read_state_file, write_state_file, TRIAD_DIR, HOME,
+    )
     from triad.circuit import snapshot_circuits
 except ImportError:
     from advisor_manager import query_configured_advisor, get_advisors, ADVISOR_CALLS_LOG
     from competition import query_competition_council, COUNCIL_SESSIONS_LOG
     from intent_engine import classify_intent
     from procutil import is_port_open, clean_git_env
-    from paths import MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER
+    from paths import (
+        MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, local_llm_port, PORT_TRIAD_SERVER,
+        read_state_file, write_state_file, TRIAD_DIR, HOME,
+    )
     from circuit import snapshot_circuits
 
 logger = logging.getLogger("triad.server")
@@ -78,7 +84,10 @@ def _safe_int_env(var: str, default: int) -> int:
 
 MAX_BODY_BYTES = _safe_int_env("TRIAD_MAX_BODY_BYTES", 4 * 1024 * 1024)  # 4 MiB
 SERVER_TOKEN = os.environ.get("TRIAD_SERVER_TOKEN", "").strip()
-PATCHES_DIR = (Path.home() / ".agents" / "triad" / "patches").resolve()
+try:
+    PATCHES_DIR = write_state_file("patches").resolve()
+except Exception:
+    PATCHES_DIR = (Path.home() / ".triad" / "patches").resolve()
 try:
     PATCHES_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:
@@ -232,7 +241,7 @@ def _subsystem_status() -> Dict[str, bool]:
         "pieces_os": PORT_PIECES_OS,
         "hermes_relay": PORT_HERMES_RELAY,
         "pieces_proxy": PORT_PIECES_PROXY,
-        "ollama": PORT_OLLAMA,
+        "llama": local_llm_port(),
     }
     out: Dict[str, bool] = {}
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
@@ -253,7 +262,12 @@ def get_telemetry_summary(limit: int = 50) -> Dict[str, Any]:
     Aggregate council_sessions.jsonl (competition adjudications) and
     advisor_calls.jsonl (every single-advisor call: latency + outcome).
     """
-    sessions = _read_jsonl(COUNCIL_SESSIONS_LOG)
+    sessions = _read_jsonl(read_state_file(
+        "logs/council_sessions.jsonl",
+        COUNCIL_SESSIONS_LOG,
+        TRIAD_DIR / "logs" / "council_sessions.jsonl",
+        HOME / ".agents" / "triad" / "logs" / "council_sessions.jsonl",
+    ))
 
     total_sessions = len(sessions)
     modes: Dict[str, int] = {}
@@ -271,7 +285,12 @@ def get_telemetry_summary(limit: int = 50) -> Dict[str, Any]:
     recent_sessions = list(reversed(sessions[-limit:]))
 
     # Per-advisor call statistics
-    calls = _read_jsonl(ADVISOR_CALLS_LOG)
+    calls = _read_jsonl(read_state_file(
+        "logs/advisor_calls.jsonl",
+        ADVISOR_CALLS_LOG,
+        TRIAD_DIR / "logs" / "advisor_calls.jsonl",
+        HOME / ".agents" / "triad" / "logs" / "advisor_calls.jsonl",
+    ))
     per_advisor: Dict[str, Dict[str, Any]] = {}
     for c in calls:
         name = str(c.get("advisor", "unknown"))
@@ -313,7 +332,11 @@ _KEYWORD_DESTRUCTIVE = re.compile(
 
 _DEVICE_ACTUATION = re.compile(
     r"(?<![a-z0-9])(?:tap|click|swipe|press|type|input|send|call|install|reset|reboot|restart|"
-    r"shutdown|power|set|enable|disable|unlock|lock|launch|open|pay|format|flash|push|pull)",
+    r"shutdown|power|set|enable|disable|unlock|lock|launch|open|pay|format|flash|push|pull|"
+    r"reply|respond|answer|dial|text|forward|transfer|toggle|turn|grant|revoke|allow|deny|share|post|"
+    r"write|approve|confirm|buy|purchase|play|record|mute|unmute|accept|decline|connect|disconnect|pair|"
+    r"sync|run|execute|trigger|schedule|submit|upload|download|move|copy|rename|clear|change|update|edit|"
+    r"add|remove|sign|authori[sz]e|book|order|cancel|stop|start|silence|dismiss|wake|sleep|volume|brightness)",
     re.I,
 )
 
@@ -803,13 +826,16 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
         return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
     def _handle_delegate(self, body: Dict[str, Any]):
+        # Phase 0b (spec 7.4 step 3) will require a token for every action.
+        # Until the mesh clients send one, ping and classify stay open. Approve and
+        # reject fail closed below (F4) even when no token is configured.
         if body.get("v") != 1 or body.get("to") != "autonomous-triad":
             self._send_json(400, {"error": "envelope is not addressed to autonomous-triad"})
             return
         envelope_id = body.get("id", "")
         sender = body.get("from", "")
         action = body.get("action", "")
-        capability = body.get("capability", "")
+        _capability = body.get("capability", "")
         payload = body.get("payload") or {}
 
         if action == "ping":
@@ -869,7 +895,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             return
 
         if action == "approve":
-            if SERVER_TOKEN and not self._is_authorized():
+            if not SERVER_TOKEN or not self._is_authorized():
                 self._send_json(401, {
                     "v": 1,
                     "inReplyTo": envelope_id,
@@ -905,7 +931,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             return
 
         if action == "reject":
-            if SERVER_TOKEN and not self._is_authorized():
+            if not SERVER_TOKEN or not self._is_authorized():
                 self._send_json(401, {
                     "v": 1,
                     "inReplyTo": envelope_id,
@@ -1184,7 +1210,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             with repo_lock:
                 try:
                     ret_check = subprocess.run(
-                        ["git", "apply", "--check", "--whitespace=nowarn", "-"],
+                        ["git", "apply", "--check", "--whitespace=nowarn", "--", "-"],
                         input=patch_bytes,
                         cwd=str(repo_dir),
                         env=clean_git_env(),
@@ -1205,7 +1231,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
 
                 try:
                     ret_apply = subprocess.run(
-                        ["git", "apply", "--whitespace=nowarn", "-"],
+                        ["git", "apply", "--whitespace=nowarn", "--", "-"],
                         input=patch_bytes,
                         cwd=str(repo_dir),
                         env=clean_git_env(),
@@ -1303,8 +1329,8 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             if engine == "competition":
                 session = query_competition_council(prompt, context=context, mode="architect")
                 return {"synthesis": session["synthesis"], "advisors": session["advisors"]}
-            if (intent == "MICRO" or engine == "ollama") and is_port_open("127.0.0.1", PORT_OLLAMA, timeout=0.3):
-                resp = query_configured_advisor("ollama", prompt, context=context, mode="general")
+            if (intent == "MICRO" or engine in ("llama", "ollama", "local")) and is_port_open("127.0.0.1", local_llm_port(), timeout=0.3):
+                resp = query_configured_advisor("llama", prompt, context=context, mode="general")
                 return {"response": resp}
             resp = query_configured_advisor("auto", prompt, context=context, mode="architect")
             return {"response": resp}

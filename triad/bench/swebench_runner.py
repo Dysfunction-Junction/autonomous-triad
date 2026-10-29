@@ -9,15 +9,16 @@ Key Capabilities:
 - Multi-engine support: auto (Claude -> Codex failover), claude, codex, bare_single (single baseline).
 - Mode selection: 'debug' (surgical error diagnosis) or 'architect' (system design & refactoring).
 - Extract unified diff patches and code solutions from model responses.
-- Worktree Isolation (Phase C): Every patch application and test evaluation runs inside
-  an isolated git worktree via triad.worktree.isolated_worktree, automatically pruned on exit.
+- Worktree Isolation (Phase C): Every patch application runs inside an isolated git worktree
+  via triad.worktree.isolated_worktree, automatically pruned on exit. Untrusted tests run only
+  in a restricted Docker sandbox and never fall back to host execution.
 - Real Git Patch Application:
     1. Downloads & caches target base files from repo at base_commit.
     2. Initializes base git state inside the isolated worktree.
     3. Runs 'git apply --check' and 'git apply' to verify syntactic & context alignment.
     4. Applies instance's real test_patch via 'git apply'.
 - Real Test Execution & Multi-Metric Evaluation:
-    Runs the instance's real FAIL_TO_PASS tests inside the isolated worktree.
+    Runs the instance's real FAIL_TO_PASS tests in the restricted Docker sandbox.
     Strictly scores 'Real Test-Verified' based on actual passing tests (code 0).
     Separately tracks 'Git Apply Succeeded' and 'Semantic Judge Match' diagnostic metrics.
 - Zero Lingering Worktrees: Guarantees 'git worktree list' is clean after execution.
@@ -33,7 +34,6 @@ import tempfile
 import subprocess
 import urllib.request
 import urllib.error
-import shutil
 import threading
 import concurrent.futures
 from contextlib import nullcontext
@@ -519,8 +519,11 @@ def ensure_base_file(repo: str, base_commit: str, rel_path: str) -> Tuple[Option
                             os.unlink(tmp_path)
                         except OSError:
                             pass
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        except subprocess.TimeoutExpired as exc:
+            return None, f"Local bare-repository lookup timed out: {exc}"
+        except OSError as exc:
+            return None, f"Local bare-repository lookup failed: {exc}"
+        return None, f"File or commit is unavailable in local bare repository {bare_repo}"
 
     # 2. Fallback to network request if bare repo missing or object not found
     url = f"https://raw.githubusercontent.com/{repo}/{base_commit}/{rel_path}"
@@ -659,7 +662,8 @@ def evaluate_in_worktree(
     """
     Evaluates instance patch inside an isolated git worktree via triad.worktree.isolated_worktree
     or a recycled warm worktree from WarmWorktreePool.
-    Applies the actual patch with git apply, applies test_patch, and attempts real test execution.
+    Applies the actual patch and test_patch in an isolated worktree. Real tests run only in
+    the restricted Docker sandbox; host execution is never used for candidate patches.
     """
     cid = instance.get("instance_id", "instance")
     repo = instance.get("repo", "unknown")
@@ -733,8 +737,12 @@ def evaluate_in_worktree(
                         continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(cached_file.read_bytes())
-                    subprocess.run(["git", "-C", str(wt), "-c", "core.autocrlf=false", "add", "-f", rel], capture_output=True)
-                    files_added_to_base += 1
+                    staged = subprocess.run(["git", "-C", str(wt), "-c", "core.autocrlf=false", "add", "-f", rel], capture_output=True, text=True)
+                    if staged.returncode != 0:
+                        detail = (staged.stderr or staged.stdout or "git add failed").strip().splitlines()[0]
+                        infra_errors.append(f"git add {rel}: {detail}")
+                    else:
+                        files_added_to_base += 1
                 elif err and not rel.endswith("dev/null"):
                     # Check if file is newly introduced from /dev/null by test_patch or candidate_patch
                     is_new_file = False
@@ -749,21 +757,25 @@ def evaluate_in_worktree(
                     if not is_new_file:
                         infra_errors.append(f"{rel} ({err})")
 
+            if files_added_to_base > 0 and not infra_errors:
+                committed = subprocess.run([
+                    "git", "-C", str(wt),
+                    "-c", "core.autocrlf=false",
+                    "-c", "user.name=TriadBench", "-c", "user.email=bench@triad.local",
+                    "commit", "-m", "Initialize base files at base_commit"
+                ], capture_output=True, text=True)
+                if committed.returncode != 0:
+                    detail = (committed.stderr or committed.stdout or "git commit failed").strip().splitlines()[0]
+                    infra_errors.append(f"git commit base files: {detail}")
+
             if infra_errors:
-                exec_msg = f"Infrastructure error fetching base files: {', '.join(infra_errors[:3])}"
-                resolution_method = "INFRA_NETWORK_ERROR"
+                is_git_error = any(item.startswith("git ") for item in infra_errors)
+                exec_msg = f"Infrastructure error {'preparing baseline' if is_git_error else 'fetching base files'}: {', '.join(infra_errors[:3])}"
+                resolution_method = "INFRA_GIT_ERROR" if is_git_error else "INFRA_NETWORK_ERROR"
             elif files_added_to_base == 0 and any(not f.endswith("dev/null") for f in all_needed_files):
                 exec_msg = "No base files materialized in worktree"
                 resolution_method = "INFRA_BASE_FILES_MISSING"
             else:
-                if files_added_to_base > 0:
-                    subprocess.run([
-                        "git", "-C", str(wt),
-                        "-c", "core.autocrlf=false",
-                        "-c", "user.name=TriadBench", "-c", "user.email=bench@triad.local",
-                        "commit", "-m", "Initialize base files at base_commit"
-                    ], capture_output=True)
-
                 # Apply candidate patch via git apply using isolated temp directory outside worktree
                 with tempfile.TemporaryDirectory(prefix="triad-patch-") as patch_dir_str:
                     patch_dir = Path(patch_dir_str)
@@ -779,36 +791,45 @@ def evaluate_in_worktree(
                         str(cand_patch_file)
                     ], capture_output=True, text=True)
 
-                    if res_apply.returncode != 0:
+                    if res_apply.returncode != 0 and not (res_apply.stderr or "").startswith("Infrastructure error"):
                         # Clean up index and conflict markers before 3-way retry
-                        subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True)
-                        subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True)
+                        reset = subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True, text=True)
+                        clean = subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True, text=True)
+                        if reset.returncode != 0 or clean.returncode != 0:
+                            failed = reset if reset.returncode != 0 else clean
+                            detail = (failed.stderr or failed.stdout or "git retry cleanup failed").strip().splitlines()[0]
+                            res_apply = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=f"Infrastructure error resetting retry state: {detail}")
+                        else:
 
-                        res_apply = subprocess.run([
-                            "git", "-C", str(wt),
-                            "-c", "core.autocrlf=false",
-                            "apply",
-                            "--3way", "--recount", "--ignore-space-change", "--ignore-whitespace",
-                            str(cand_patch_file)
-                        ], capture_output=True, text=True)
+                            res_apply = subprocess.run([
+                                "git", "-C", str(wt),
+                                "-c", "core.autocrlf=false",
+                                "apply",
+                                "--3way", "--recount", "--ignore-space-change", "--ignore-whitespace",
+                                str(cand_patch_file)
+                            ], capture_output=True, text=True)
                         if res_apply.returncode == 0:
                             apply_method = "3way"
 
-                    if res_apply.returncode != 0:
+                    if res_apply.returncode != 0 and not (res_apply.stderr or "").startswith("Infrastructure error"):
                         # Clean up again before fuzzy retry
-                        subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True)
-                        subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True)
-
-                        try:
+                        reset = subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True, text=True)
+                        clean = subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True, text=True)
+                        if reset.returncode != 0 or clean.returncode != 0:
+                            failed = reset if reset.returncode != 0 else clean
+                            detail = (failed.stderr or failed.stdout or "git retry cleanup failed").strip().splitlines()[0]
+                            res_apply = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=f"Infrastructure error resetting fuzzy retry state: {detail}")
+                        else:
                             try:
-                                from triad_engine import apply_patch_text
-                            except ImportError:
-                                from triad.triad_engine import apply_patch_text
-                            if apply_patch_text(candidate_patch_text, cwd=wt, allow_3way=True):
-                                res_apply = subprocess.CompletedProcess(args=[], returncode=0, stdout="applied via fuzzy fallback", stderr="")
-                                apply_method = "fuzzy"
-                        except Exception:
-                            pass
+                                try:
+                                    from triad_engine import apply_patch_text
+                                except ImportError:
+                                    from triad.triad_engine import apply_patch_text
+                                if apply_patch_text(candidate_patch_text, cwd=wt, allow_3way=True):
+                                    res_apply = subprocess.CompletedProcess(args=[], returncode=0, stdout="applied via fuzzy fallback", stderr="")
+                                    apply_method = "fuzzy"
+                            except Exception:
+                                pass
 
                     if res_apply.returncode == 0 and test_patch:
                         tpatch_file = patch_dir / "test.patch"
@@ -836,7 +857,7 @@ def evaluate_in_worktree(
                     patch_applied = True
                     exec_msg = f"Git apply succeeded in isolated worktree ({apply_method})"
 
-                    # Repo-native Docker tests when a local clone exists. Host pytest remains the fallback.
+                    # Candidate patches are untrusted; test execution is Docker-only.
                     if fail_to_pass and test_patch_applied and use_docker:
                         from triad.bench.docker_harness import try_native_docker_tests
                         docker_result = try_native_docker_tests(
@@ -847,61 +868,13 @@ def evaluate_in_worktree(
                             list(fail_to_pass),
                             repos_dir=CACHE_DIR / "repos",
                         )
-                        if docker_result.get("executed"):
-                            tests_executed = True
-                            tests_passed = bool(docker_result.get("passed"))
-                            resolution_method = str(docker_result.get("method") or "DOCKER_NATIVE")
-                            exec_msg = str(docker_result.get("message") or exec_msg)
-
-                    # Attempt real test execution if tests are specified and test_patch applied cleanly
-                    if fail_to_pass and test_patch_applied and not tests_executed:
-                        # Dynamically discover test runner
-                        uv_bin = shutil.which("uv") or shutil.which("uv.exe") or os.environ.get("UV_PATH")
-
-                        target_tests = list(fail_to_pass)
-                        test_cmd = None
-                        if uv_bin:
-                            test_cmd = [uv_bin, "run", "--with", "pytest", "--python", "3.11", "pytest"] + target_tests
-                        elif shutil.which("pytest"):
-                            test_cmd = ["pytest"] + target_tests
-
-                        if test_cmd:
-                            env = os.environ.copy()
-                            env["PYTHONPATH"] = str(wt)
-                            try:
-                                res_test = subprocess.run(
-                                    test_cmd,
-                                    cwd=str(wt),
-                                    env=env,
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=45
-                                )
-                                if res_test.returncode == 0:
-                                    tests_executed = True
-                                    tests_passed = True
-                                    resolution_method = "REAL_TEST_EXECUTION"
-                                    exec_msg = "Real tests passed with 0 errors in worktree"
-                                elif res_test.returncode == 1:
-                                    tests_executed = True
-                                    tests_passed = False
-                                    resolution_method = "TESTS_FAILED"
-                                    exec_msg = "Real tests executed and assertions failed (exit code 1)"
-                                else:
-                                    tests_executed = False
-                                    tests_passed = False
-                                    resolution_method = "TEST_COLLECTION_ERROR"
-                                    exec_msg = f"Test environment/collection error (exit code {res_test.returncode})"
-                            except subprocess.TimeoutExpired:
-                                tests_executed = True
-                                tests_passed = False
-                                resolution_method = "TESTS_TIMEOUT"
-                                exec_msg = "Real tests timed out after 45s"
-                            except Exception as e:
-                                tests_executed = False
-                                tests_passed = False
-                                resolution_method = "TESTS_ERROR"
-                                exec_msg = f"Real tests execution error: {e}"
+                        tests_executed = bool(docker_result.get("executed"))
+                        tests_passed = bool(docker_result.get("passed"))
+                        resolution_method = str(docker_result.get("method") or "DOCKER_UNAVAILABLE")
+                        exec_msg = str(docker_result.get("message") or "Docker tests unavailable; host execution is disabled")
+                    elif fail_to_pass and test_patch_applied:
+                        resolution_method = "DOCKER_DISABLED"
+                        exec_msg = "Docker sandbox is disabled; host execution of candidate patches is disabled"
                     elif test_patch and not test_patch_applied:
                         resolution_method = "TEST_PATCH_FAILED"
                         exec_msg = "Authoritative test patch failed to apply in worktree"
@@ -926,8 +899,12 @@ def evaluate_in_worktree(
                     patch_applied = False
                     err_clean = (res_apply.stderr or res_apply.stdout or "patch does not apply").strip().splitlines()
                     first_err = err_clean[0] if err_clean else "git apply failed"
-                    exec_msg = f"Git apply failed: {first_err}"
-                    resolution_method = "GIT_APPLY_FAILED"
+                    if first_err.startswith("Infrastructure error"):
+                        exec_msg = first_err
+                        resolution_method = "INFRA_GIT_ERROR"
+                    else:
+                        exec_msg = f"Git apply failed: {first_err}"
+                        resolution_method = "GIT_APPLY_FAILED"
 
     except Exception as e:
         exec_msg = f"Worktree execution exception: {e}"
@@ -1031,7 +1008,7 @@ def run_swebench(
     judge_engine: str = "claude",
     workers: int = 2,
     verbose: bool = False,
-    docker_mode: str = "off",
+    docker_mode: str = "auto",
 ) -> Tuple[int, int, List[Dict[str, Any]]]:
     """
     Executes the SWE-bench runner across instances.
@@ -1060,7 +1037,7 @@ def run_swebench(
 
     judge_engine = _keep_claude_as_judge(engine, judge_engine)
     from triad.bench.docker_harness import docker_is_running
-    docker_choice = (docker_mode or "off").strip().lower()
+    docker_choice = (docker_mode or "auto").strip().lower()
     if docker_choice == "on":
         use_docker = True
     elif docker_choice == "off":
@@ -1315,8 +1292,8 @@ def main():
     parser.add_argument(
         "--docker",
         choices=["auto", "on", "off"],
-        default="off",
-        help="Repo-native tests in Docker when a local clone exists (default: off; auto tries when Docker is up)"
+        default="auto",
+        help="Use the restricted Docker sandbox for tests (default: auto; off disables test execution)"
     )
     parser.add_argument(
         "--workers",
@@ -1388,4 +1365,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

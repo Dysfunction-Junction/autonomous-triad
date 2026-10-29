@@ -1,8 +1,10 @@
 {
+  "schema_version": 2,
   "advisors": [
     {
       "name": "claude",
-      "display_name": "Claude 3.7 Sonnet (Claude Pro)",
+      "display_name": "Claude Code (Claude Pro)",
+      "role": "production",
       "binary_path": "~/.local/bin/claude.exe",
       "fallback_binary": "claude",
       "priority": 1,
@@ -23,11 +25,23 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.95,
+        "coding": 0.95,
+        "reasoning": 0.85,
+        "judge": 0.95,
+        "red_team": 0.8,
+        "long_context": 0.6,
+        "micro": 0.15,
+        "scraping": 0.2,
+        "browsing": 0.2
+      }
     },
     {
       "name": "codex",
-      "display_name": "OpenAI Codex (gpt-6-astra via ChatGPT Plus)",
+      "display_name": "OpenAI Codex (ChatGPT Plus)",
+      "role": "production",
       "binary_path": "{localappdata}/Programs/OpenAI/Codex/bin/codex.exe",
       "fallback_binary": "codex",
       "priority": 2,
@@ -81,11 +95,23 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.85,
+        "coding": 0.9,
+        "reasoning": 0.95,
+        "judge": 0.85,
+        "red_team": 0.95,
+        "long_context": 0.55,
+        "micro": 0.15,
+        "scraping": 0.2,
+        "browsing": 0.2
+      }
     },
     {
       "name": "antigravity",
-      "display_name": "Google Antigravity (Gemini 2.5 Pro / 2M Context)",
+      "display_name": "Google Antigravity",
+      "role": "production",
       "binary_path": "{localappdata}/agy/bin/agy.exe",
       "fallback_binary": "agy",
       "priority": 3,
@@ -103,11 +129,23 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.8,
+        "coding": 0.75,
+        "reasoning": 0.75,
+        "judge": 0.7,
+        "red_team": 0.7,
+        "long_context": 1.0,
+        "micro": 0.3,
+        "scraping": 0.5,
+        "browsing": 0.5
+      }
     },
     {
       "name": "nous",
       "display_name": "Nous Research (Hermes Portal)",
+      "role": "production",
       "binary_path": "python",
       "fallback_binary": "python3",
       "priority": 4,
@@ -119,26 +157,55 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.5,
+        "coding": 0.5,
+        "reasoning": 0.45,
+        "judge": 0.55,
+        "red_team": 0.5,
+        "long_context": 0.3,
+        "micro": 0.8,
+        "scraping": 0.8,
+        "browsing": 0.8
+      }
     },
     {
-      "name": "ollama",
-      "display_name": "Ollama Local Advisor (qwen3:1.7b)",
-      "binary_path": "{localappdata}/Programs/Ollama/ollama.exe",
-      "fallback_binary": "ollama",
+      "name": "llama",
+      "aliases": ["ollama", "local"],
+      "display_name": "Local llama.cpp (llama-server)",
+      "role": "production",
       "priority": 5,
-      "execution_flags": [
-        "run",
-        "qwen3:1.7b",
-        "--think=false"
-      ],
-      "input_mode": "stdin",
-      "output_mode": "stdout",
-      "readiness_port": "{port_ollama}",
-      "env": {
-        "PYTHONIOENCODING": "utf-8"
+      "enabled": true,
+      "transport": "openai_http",
+      "model": "qwen3:1.7b",
+      "readiness_port": "{port_local_llm}",
+      "timeout": 90,
+      "context_tokens": "auto",
+      "strengths": {
+        "architecture": 0.1,
+        "coding": 0.15,
+        "reasoning": 0.1,
+        "judge": 0,
+        "red_team": 0,
+        "long_context": 0,
+        "micro": 0.95,
+        "scraping": 0.95,
+        "browsing": 0.95
       },
-      "enabled": true
+      "backend_overrides": {
+        "ollama": {
+          "transport": "subprocess",
+          "display_name": "Ollama Local Advisor (qwen3:1.7b)",
+          "binary_path": "{localappdata}/Programs/Ollama/ollama.exe",
+          "fallback_binary": "ollama",
+          "execution_flags": ["run", "qwen3:1.7b", "--think=false"],
+          "input_mode": "stdin",
+          "output_mode": "stdout",
+          "readiness_port": "{port_ollama}",
+          "env": {"PYTHONIOENCODING": "utf-8"}
+        }
+      }
     },
     {
       "name": "oz",

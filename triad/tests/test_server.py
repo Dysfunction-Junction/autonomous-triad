@@ -246,6 +246,7 @@ class TestTriadServer(unittest.TestCase):
             patch_content = b"# empty dummy patch\n"
             dummy_sha = hashlib.sha256(patch_content).hexdigest()
             temp_patch_path = str(PATCHES_DIR / "test_conflict.patch")
+            PATCHES_DIR.mkdir(parents=True, exist_ok=True)
             with open(temp_patch_path, "wb") as pf:
                 pf.write(patch_content)
 
@@ -465,7 +466,10 @@ class TestTriadServer(unittest.TestCase):
             self.assertIn("name", adv)
 
     def test_loopback_delegate_classifies_without_leaving_the_pc(self):
-        status, _headers, body = self._post("/mishmash/delegate", {
+        patcher = patch("triad.server.SERVER_TOKEN", "token-xyz")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        status, _headers, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "0123456789abcdef",
             "from": "pieces-android-companion-seamless",
@@ -479,8 +483,60 @@ class TestTriadServer(unittest.TestCase):
         self.assertEqual(body["from"], "autonomous-triad")
         self.assertIn("intent", body["result"])
 
+    def _post_authed(self, path: str, payload: dict):
+        return self._post(path, payload, {"Authorization": "Bearer token-xyz"})
+
+    @unittest.skip(
+        "Held for Phase 0b (spec 7.4 step 3). Phase 0a ships F4 only: approve and reject "
+        "fail closed without TRIAD_SERVER_TOKEN, while ping and classify stay open so the live mesh keeps working."
+    )
+    def test_mishmash_delegate_every_action_requires_token(self):
+        for action in ("ping", "classify", "bogus"):
+            env = {
+                "v": 1, "id": "env-" + action, "from": "test-client",
+                "to": "autonomous-triad", "capability": "intent",
+                "action": action, "payload": {"text": "review this diff"},
+            }
+            # No token configured on the server -> 401 even if the client sends one.
+            with patch("triad.server.SERVER_TOKEN", ""):
+                status, _, body = self._post_authed("/mishmash/delegate", env)
+                self.assertEqual(status, 401, action)
+                self.assertFalse(body.get("ok"))
+                self.assertEqual(body.get("inReplyTo"), "env-" + action)
+                self.assertEqual(body.get("from"), "autonomous-triad")
+            # Token configured, none presented -> 401.
+            with patch("triad.server.SERVER_TOKEN", "token-xyz"):
+                status, _, body = self._post("/mishmash/delegate", env)
+                self.assertEqual(status, 401, action)
+                self.assertFalse(body.get("ok"))
+                # Wrong token -> 401.
+                status, _, body = self._post("/mishmash/delegate", env, {"Authorization": "Bearer nope"})
+                self.assertEqual(status, 401, action)
+                # Correct token is accepted (unknown action then falls through to 400).
+                status, _, _ = self._post_authed("/mishmash/delegate", env)
+                self.assertEqual(status, 400 if action == "bogus" else 200, action)
+
+    def test_mishmash_delegate_approve_reject_fail_closed_without_server_token(self):
+        for action, extra in (("approve", {"nonce": "nonce_123"}), ("reject", {})):
+            with patch("triad.server.SERVER_TOKEN", ""):
+                status, _, body = self._post("/mishmash/delegate", {
+                    "v": 1,
+                    "id": "test-env-notoken",
+                    "from": "test-client",
+                    "to": "autonomous-triad",
+                    "capability": "intent",
+                    "action": action,
+                    "payload": {"proposal_id": "prop_123", **extra},
+                })
+                self.assertEqual(status, 401, action)
+                self.assertFalse(body.get("ok"))
+
     def test_mishmash_delegate_classify_and_risk_gating(self):
-        status, _, body = self._post("/mishmash/delegate", {
+        # Delegated approve/reject require TRIAD_SERVER_TOKEN; the helper sends it.
+        patcher = patch("triad.server.SERVER_TOKEN", "token-xyz")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0001",
             "from": "test-client",
@@ -493,7 +549,7 @@ class TestTriadServer(unittest.TestCase):
         self.assertTrue(body.get("ok"))
         self.assertEqual(body.get("result", {}).get("status"), "ok")
 
-        status, _, body = self._post("/mishmash/delegate", {
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0002",
             "from": "test-client",
@@ -509,7 +565,7 @@ class TestTriadServer(unittest.TestCase):
         self.assertFalse(res.get("approval_required"))
         self.assertFalse(res.get("requires_biometric"))
 
-        status, _, body = self._post("/mishmash/delegate", {
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0003",
             "from": "test-client",
@@ -526,7 +582,7 @@ class TestTriadServer(unittest.TestCase):
         self.assertTrue(res.get("requires_biometric"))
 
         # Test delegate action approve missing args -> 400
-        status, _, body = self._post("/mishmash/delegate", {
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0004",
             "from": "test-client",
@@ -557,7 +613,7 @@ class TestTriadServer(unittest.TestCase):
         mock_del_resp.read.return_value = json.dumps({"ok": True, "result": {"status": "released"}}).encode("utf-8")
         mock_del_resp.__enter__.return_value = mock_del_resp
         with patch("triad.server._OPENER.open", return_value=mock_del_resp):
-            status, _, body = self._post("/mishmash/delegate", {
+            status, _, body = self._post_authed("/mishmash/delegate", {
                 "v": 1,
                 "id": "test-env-0005",
                 "from": "test-client",
@@ -589,7 +645,7 @@ class TestTriadServer(unittest.TestCase):
         mock_del_purge.read.return_value = json.dumps({"ok": True, "result": {"status": "purged"}}).encode("utf-8")
         mock_del_purge.__enter__.return_value = mock_del_purge
         with patch("triad.server._OPENER.open", return_value=mock_del_purge):
-            status, _, body = self._post("/mishmash/delegate", {
+            status, _, body = self._post_authed("/mishmash/delegate", {
                 "v": 1,
                 "id": "test-env-0006",
                 "from": "test-client",
@@ -605,7 +661,7 @@ class TestTriadServer(unittest.TestCase):
 
         # Test delegate action reject with upstream failure -> 502
         with patch("triad.server._OPENER.open", side_effect=ConnectionRefusedError("connection refused")):
-            status, _, body = self._post("/mishmash/delegate", {
+            status, _, body = self._post_authed("/mishmash/delegate", {
                 "v": 1,
                 "id": "test-env-0007",
                 "from": "test-client",
@@ -702,6 +758,19 @@ class TestTriadServer(unittest.TestCase):
         risk_mix, app_mix, _ = _evaluate_action_risk(cls_device, "factory reset the phone and check status")
         self.assertEqual(risk_mix, "medium")
         self.assertTrue(app_mix)
+
+        # 12b. Unlisted actuation verbs must not slip past the read-only allowlist
+        for phrase in (
+            "check phone then reply yes to bob",
+            "read sms and forward it to alice",
+            "get phone battery then transfer funds",
+            "list phone apps and grant camera permission",
+            "show phone status and toggle airplane mode",
+        ):
+            risk_v, app_v, reasons_v = _evaluate_action_risk(cls_device, phrase)
+            self.assertEqual(risk_v, "medium", phrase)
+            self.assertTrue(app_v, phrase)
+            self.assertIn("device_actuation", reasons_v, phrase)
 
         # 13. rm flag order variations
         risk_rm1, app_rm1, _ = _evaluate_action_risk(cls_general, "rm /tmp/x -rf")

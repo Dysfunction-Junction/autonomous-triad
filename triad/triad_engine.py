@@ -40,7 +40,7 @@ EMPTY_MCP = TRIAD_DIR / "empty-mcp.json"
 try:
     from triad.paths import (
         CLAUDE_PATH, CODEX_PATH, AGY_PATH, HERMES_PATH, CODEX_AUTH,
-        PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER,
+        PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_TRIAD_SERVER, local_llm_port,
         PORT_EXOCORTEX_DAEMON, PORT_PIECES_PROXY, PORT_PIECES_FOR_ALL,
         PORT_AGENT_MESH_MCP, PORT_NEO4J_BOLT,
         AGENT_MESH_DIR, AGENT_MESH_SERVER,
@@ -57,7 +57,7 @@ try:
 except ImportError:
     from paths import (
         CLAUDE_PATH, CODEX_PATH, AGY_PATH, HERMES_PATH, CODEX_AUTH,
-        PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER,
+        PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_TRIAD_SERVER, local_llm_port,
         PORT_EXOCORTEX_DAEMON, PORT_PIECES_PROXY, PORT_PIECES_FOR_ALL,
         PORT_AGENT_MESH_MCP, PORT_NEO4J_BOLT,
         AGENT_MESH_DIR, AGENT_MESH_SERVER,
@@ -297,7 +297,7 @@ def collect_doctor_report(probe_advisors: bool = True, claude_probe_timeout: int
         "pieces_for_all": PORT_PIECES_FOR_ALL,
         "agent_mesh": PORT_AGENT_MESH_MCP,
         "neo4j": PORT_NEO4J_BOLT,
-        "ollama": PORT_OLLAMA,
+        "llama": local_llm_port(),
         "triad_server": PORT_TRIAD_SERVER,
     }
     with ThreadPoolExecutor(max_workers=len(subsystem_targets)) as executor:
@@ -432,7 +432,7 @@ def _render_doctor_report(report: Dict[str, Any]) -> None:
         ("pieces_for_all", "Pieces Gateway"),
         ("agent_mesh", "Agent Mesh MCP"),
         ("neo4j", "Neo4j Graph"),
-        ("ollama", "Ollama"),
+        ("llama", "llama.cpp"),
         ("triad_server", "Triad HTTP"),
     ]
     for key, label in subsystem_labels:
@@ -686,19 +686,19 @@ def apply_patch_text(patch_text: str, cwd: Optional[Path] = None, env: Optional[
             f.write(raw_diff + "\n")
 
         # 1. Check dry-run with whitespace tolerance for Windows
-        check_cmd = ["git", "apply", "--check", "--whitespace=fix", "--ignore-whitespace", temp_patch_path]
+        check_cmd = ["git", "apply", "--check", "--whitespace=fix", "--ignore-whitespace", "--", temp_patch_path]
         check_res = subprocess.run(check_cmd, cwd=str(target_dir), env=exec_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if check_res.returncode != 0:
             if not allow_3way:
                 return False
             # Fallback retry with 3-way merge (strictly isolated to ephemeral worktrees)
-            check_cmd = ["git", "apply", "--check", "--3way", temp_patch_path]
+            check_cmd = ["git", "apply", "--check", "--3way", "--", temp_patch_path]
             check_res = subprocess.run(check_cmd, cwd=str(target_dir), env=exec_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if check_res.returncode != 0:
                 return False
-            apply_cmd = ["git", "apply", "--3way", temp_patch_path]
+            apply_cmd = ["git", "apply", "--3way", "--", temp_patch_path]
         else:
-            apply_cmd = ["git", "apply", "--whitespace=fix", "--ignore-whitespace", temp_patch_path]
+            apply_cmd = ["git", "apply", "--whitespace=fix", "--ignore-whitespace", "--", temp_patch_path]
 
         # 2. Apply patch
         apply_res = subprocess.run(apply_cmd, cwd=str(target_dir), env=exec_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -1700,7 +1700,7 @@ def apply_verified_patch_to_workspace(
             r1, _, _ = run_subprocess_tree_safe(["git", "read-tree", baseline_tree], cwd=target_dir, env=temp_target_env)
             if r1 != 0:
                 return False
-            r2, _, _ = run_subprocess_tree_safe(["git", "apply", "--cached", "--whitespace=nowarn", temp_patch_path], cwd=target_dir, env=temp_target_env)
+            r2, _, _ = run_subprocess_tree_safe(["git", "apply", "--cached", "--whitespace=nowarn", "--", temp_patch_path], cwd=target_dir, env=temp_target_env)
             if r2 != 0:
                 return False
             r3, out_tree, _ = run_subprocess_tree_safe(["git", "write-tree"], cwd=target_dir, env=temp_target_env)
@@ -1887,7 +1887,7 @@ def apply_verified_patch_to_workspace(
             backup_entries[file_p] = entry
 
         # 2. Dry run verify against working tree without modifying index (strictly byte-accurate)
-        check_cmd = ["git", "apply", "--check", "--whitespace=nowarn", temp_patch_path]
+        check_cmd = ["git", "apply", "--check", "--whitespace=nowarn", "--", temp_patch_path]
         check_res = subprocess.run(check_cmd, cwd=str(target_dir), env=exec_env, capture_output=True)
         if check_res.returncode != 0:
             return False
@@ -1910,7 +1910,7 @@ def apply_verified_patch_to_workspace(
 
         # 4. Apply strictly to working tree (NO --index, NO --3way, NO --whitespace=fix)
         application_started = True
-        apply_cmd = ["git", "apply", "--whitespace=nowarn", temp_patch_path]
+        apply_cmd = ["git", "apply", "--whitespace=nowarn", "--", temp_patch_path]
         apply_res = subprocess.run(apply_cmd, cwd=str(target_dir), env=exec_env, capture_output=True)
         if apply_res.returncode != 0:
             rec_path = get_recovery_patch_path(target_dir, unique=True)
@@ -2506,6 +2506,9 @@ def _run_in_isolated_worktree(
     base_env = env if env is not None else os.environ
     _check_apply_verified_safety(args, base_env)
     ref = getattr(args, "ref", "HEAD") or "HEAD"
+    if str(ref).startswith("-"):
+        print(f"\n❌ [Triad Worktree Error] Invalid --ref {ref!r}: a ref must not start with '-'.", file=sys.stderr)
+        sys.exit(1)
     apply_verified = getattr(args, "apply_verified", False)
 
     try:
@@ -3227,6 +3230,41 @@ def _verify_checkout_representation(
     return mismatches
 
 
+PROPOSED_FIX_PATCH_NAME = "triad-review/triad_proposed_fix.patch"
+
+
+def write_proposed_fix_patch(repo_root: Path, text: str) -> Optional[Path]:
+    """Persist an advisor-proposed fix under the repo's git dir (never the working tree).
+
+    The destination is ``<git dir>/triad-review/triad_proposed_fix.patch``. The data is written to an
+    exclusively-created temp file (O_EXCL|O_NOFOLLOW) in the same directory and moved into
+    place with ``os.replace``, so a pre-planted symlink at the destination is replaced
+    rather than followed. Returns the path, or None if the git dir cannot be resolved.
+    """
+    ret, out, _ = run_subprocess_tree_safe(["git", "rev-parse", "--git-path", PROPOSED_FIX_PATCH_NAME], cwd=repo_root)
+    if ret != 0 or not out.strip():
+        return None
+    dest = Path(out.strip())
+    if not dest.is_absolute():
+        dest = Path(repo_root) / dest
+    dest = dest.parent.resolve() / dest.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex[:8]}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(tmp), flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(text.encode("utf-8"))
+        os.replace(str(tmp), str(dest))
+    except BaseException:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise
+    return dest
+
+
 def _handle_validation_failure(
     *,
     stage_label: str,
@@ -3249,7 +3287,8 @@ def _handle_validation_failure(
       * If the retry budget is exhausted the gate fails closed (exit 1).
       * Otherwise the Advisory Council is asked for a surgical unified diff.
           - Direct (non-worktree) execution never mutates the user's files: the proposed
-            patch is persisted to ``.triad_proposed_fix.patch`` and the gate exits 1.
+            patch is persisted to ``<git dir>/triad-review/triad_proposed_fix.patch``
+            and the gate exits 1.
           - Worktree execution applies the patch, stages it, records it in
             ``args._self_healed_patches`` and returns the new ``(attempt, candidate_tree)``
             so the caller can restart the validation sequence.
@@ -3271,14 +3310,18 @@ def _handle_validation_failure(
     print(f"[Advisory Council Proposed Fix]:\n{advisor_fix}\n")
 
     if not in_worktree:
-        patch_file = cwd / ".triad_proposed_fix.patch"
+        patch_file = None
         try:
-            patch_file.write_text(advisor_fix, encoding="utf-8")
-            print(f"\n[Triad Direct Execution Notice] Self-healing fix proposed by Advisory Council persisted to:\n  {patch_file}")
+            patch_file = write_proposed_fix_patch(cwd, advisor_fix)
         except Exception:
-            pass
+            patch_file = None
+        if patch_file is not None:
+            print(f"\n[Triad Direct Execution Notice] Self-healing fix proposed by Advisory Council persisted to:\n  {patch_file}")
+        else:
+            print("\n[Triad Direct Execution Notice] Could not persist the proposed fix under the git directory; see the output above.")
         print("Direct execution preserves working directory files without uncoordinated in-place mutation.")
-        print("To review or apply the fix: git apply .triad_proposed_fix.patch")
+        if patch_file is not None:
+            print(f"To review or apply the fix: git apply \"{patch_file}\"")
         print("Or run with 'triad gate --worktree --apply-verified' for isolated verification and atomic application.")
         sys.exit(1)
 
@@ -3749,7 +3792,10 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
                     with open(package_json, "r", encoding="utf-8") as f:
                         pkg_data = json.load(f)
                     scripts = pkg_data.get("scripts", {})
-                    if "test" in scripts:
+                    script = str(scripts.get("test") or "")
+                    # Vitest's `--run` is appended below. A Python test script is already
+                    # executed by the Python runner, and that extra flag breaks pytest.
+                    if "test" in scripts and not re.search(r"\b(pytest|unittest)\b", script):
                         ran_any_tests = True
                         print("[Step 2/3] Running local test suite (npm test)...")
                         test_cmd = [NPM_CMD, "test", "--", "--run"]
@@ -4054,10 +4100,28 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
 
     # Parse verdict fail-closed: distinguish outages from explicit verdicts
     resp_clean = (resp or "").strip()
-    if not resp_clean or resp_clean.startswith("[Error") or resp_clean.startswith("[error"):
+    council_errored = bool(competition and isinstance(session, dict) and session.get("status") == "error")
+    if (
+        not resp_clean
+        or resp_clean.startswith("[Error")
+        or resp_clean.startswith("[error")
+        or council_errored
+        or classify_advisor_response(resp_clean) in ("limit", "error", "timeout", "empty")
+    ):
         print("\n❌ [Triad Gate BLOCKED] Advisory Council execution error or service outage.")
         if resp_clean:
             print(f"Details: {resp_clean[:200]}")
+        sys.exit(1)
+
+    # Fail closed: a competition council that ran degraded (one advisor failed) or without
+    # quorum must never approve a pre-commit signoff.
+    if competition and (
+        not isinstance(session, dict)
+        or session.get("status") == "degraded"
+        or not session.get("quorum_met")
+    ):
+        print("\n❌ [Triad Gate BLOCKED] Competition council degraded or quorum not met; refusing to approve.")
+        notify_event("Pre-Commit Gate Blocked", "Competition council degraded or quorum not met.", status="failed", timeout=1.5)
         sys.exit(1)
 
     # Rejection anywhere in the response takes precedence and immediately blocks
@@ -5875,9 +5939,9 @@ def cmd_sync(args):
     Ensures zero drift between repository development and the live user execution environment.
     """
     try:
-        from triad.sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
+        from triad.sync_manager import run_full_sync
     except ImportError:
-        from sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
+        from sync_manager import run_full_sync
 
     apply_flag = getattr(args, "apply", False)
     dry_run = getattr(args, "dry_run", False) or not apply_flag
@@ -5954,7 +6018,7 @@ def cmd_sync(args):
 
     # Hooks
     if report.get("hooks"):
-        print(f"[4] Active Repository Pre-Commit Hooks:")
+        print("[4] Active Repository Pre-Commit Hooks:")
         for h in report["hooks"]:
             status_tag = f"[{h['hook_status'].upper()}]"
             action_note = f" -> {h['action_taken']}" if h.get("action_taken") != "none" else ""

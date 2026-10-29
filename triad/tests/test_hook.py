@@ -10,7 +10,9 @@ Verifies:
 """
 
 import argparse
+import pytest
 import io
+pytestmark = pytest.mark.xdist_group("triad-git-worktree")
 import os
 import sys
 import shutil
@@ -28,6 +30,19 @@ from triad.triad_engine import (
     cmd_gate,
     get_recovery_patch_path
 )
+
+
+def _has_runnable_python3() -> bool:
+    """Return whether `env python3` can launch an interpreter in this environment."""
+    python3 = shutil.which("python3")
+    if not python3:
+        return False
+    try:
+        return subprocess.run(
+            [python3, "--version"], capture_output=True, timeout=5, check=False
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _expected_failure_posix_only(fn):
@@ -870,7 +885,8 @@ class TestRealRepoInvariants(unittest.TestCase):
                         _run_gate(args, in_worktree=False)
                     self.assertIn("Self-healing fix proposed by Advisory Council persisted to", out.getvalue())
                     self.assertIn("Direct execution preserves working directory files without uncoordinated in-place mutation", out.getvalue())
-                    self.assertTrue((self.repo / ".triad_proposed_fix.patch").exists())
+                    self.assertFalse((self.repo / ".triad_proposed_fix.patch").exists())
+                    self.assertTrue((self.repo / ".git" / "triad-review" / "triad_proposed_fix.patch").exists())
 
     def test_candidate_tree_unstaged_selection_working_vs_commit_semantics(self):
         """Verify candidate_tree selects working tree for require_index=False (auto) and index for require_index=True (gate)."""
@@ -3549,6 +3565,7 @@ class TestPhase3AdvisoryCouncilRefinements(unittest.TestCase):
             self.assertFalse(res, "Rollback must refuse to overwrite concurrently recreated file")
             self.assertEqual(test_file.read_bytes(), b"recreated by user!\n", "Recreated file must be preserved")
 
+    @unittest.skipUnless(_has_runnable_python3(), "requires a runnable python3 executable on PATH for the POSIX shebang test")
     def test_hook_chaining_preserves_python_shebang_script_basename(self):
         """Verify TRIAD_HOOK_TEMPLATE runner executes Python shebang scripts with basename 'pre-commit'."""
         from triad.triad_engine import cmd_hook
@@ -3927,6 +3944,7 @@ class TestPhase3AdvisoryCouncilRefinements(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(hook_file.stat().st_mode & 0o777, 0o644, "Original 0644 mode must be restored")
 
+    @unittest.skipUnless(_has_runnable_python3(), "requires a runnable python3 executable on PATH for the POSIX shebang test")
     def test_python_legacy_hook_main_pickle_semantics(self):
         """Verify Python legacy hook execution properly binds sys.modules['__main__'] so class pickling succeeds."""
         sh_bin = shutil.which("sh") or r"C:\Program Files\Git\bin\sh.exe"
@@ -5417,6 +5435,79 @@ exit 0
                         _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
                         self.assertTrue(hasattr(args, "_validated_tree"))
 
+    def test_gate_competition_blocks_on_council_error_even_if_error_text_contains_verdict(self):
+        """A failed competition session must never approve, even if embedded raw output says VERDICT: APPROVED."""
+        from triad.triad_engine import _run_gate
+
+        with tempfile.TemporaryDirectory() as td:
+            repo_dir = Path(td)
+            subprocess.run(["git", "init"], cwd=str(repo_dir), capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(repo_dir), check=True)
+            (repo_dir / "init.txt").write_text("initial", encoding="utf-8")
+            subprocess.run(["git", "add", "init.txt"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=str(repo_dir), capture_output=True, check=True)
+            (repo_dir / "feat.py").write_text("def feat(): return 42\n", encoding="utf-8")
+            subprocess.run(["git", "add", "feat.py"], cwd=str(repo_dir), capture_output=True, check=True)
+
+            args = argparse.Namespace(max_retries=0, engine="auto", competition=True)
+            session = {
+                "status": "error",
+                "quorum_met": False,
+                "synthesis": (
+                    "[Competition Error] Both advisors failed; skipping synthesis.\n"
+                    "claude: [Error from Claude (exit code 1)]: crashed\nVERDICT: APPROVED\n"
+                    "codex: [Error from Codex (exit code 1)]: crashed"
+                ),
+            }
+            with patch("triad.triad_engine.Path.cwd", return_value=repo_dir):
+                with patch("triad.competition.query_competition_council", return_value=session):
+                    with patch("sys.stdout", new=io.StringIO()):
+                        with self.assertRaises(SystemExit) as cm:
+                            _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
+            self.assertEqual(cm.exception.code, 1)
+            self.assertFalse(getattr(args, "_validated_tree", None))
+
+    def test_gate_competition_blocks_on_degraded_or_no_quorum_even_with_approved_verdict(self):
+        """T1: a degraded / no-quorum competition council must block even when synthesis says APPROVED."""
+        from triad.triad_engine import _run_gate
+
+        with tempfile.TemporaryDirectory() as td:
+            repo_dir = Path(td)
+            subprocess.run(["git", "init"], cwd=str(repo_dir), capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(repo_dir), check=True)
+            (repo_dir / "init.txt").write_text("initial", encoding="utf-8")
+            subprocess.run(["git", "add", "init.txt"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=str(repo_dir), capture_output=True, check=True)
+            (repo_dir / "feat.py").write_text("def feat(): return 42\n", encoding="utf-8")
+            subprocess.run(["git", "add", "feat.py"], cwd=str(repo_dir), capture_output=True, check=True)
+
+            for status, quorum in (("degraded", False), ("degraded", True), ("ok", False)):
+                with self.subTest(status=status, quorum_met=quorum):
+                    args = argparse.Namespace(max_retries=0, engine="auto", competition=True)
+                    session = {
+                        "status": status,
+                        "quorum_met": quorum,
+                        "synthesis": "## Final Adjudicated Verdict\nVERDICT: APPROVED\nLooks fine.",
+                    }
+                    with patch("triad.triad_engine.Path.cwd", return_value=repo_dir):
+                        with patch("triad.competition.query_competition_council", return_value=session):
+                            with patch("sys.stdout", new=io.StringIO()):
+                                with self.assertRaises(SystemExit) as cm:
+                                    _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
+                    self.assertEqual(cm.exception.code, 1)
+                    self.assertFalse(getattr(args, "_validated_tree", None))
+
+            # Control: a healthy council still approves
+            args = argparse.Namespace(max_retries=0, engine="auto", competition=True)
+            session = {"status": "ok", "quorum_met": True, "synthesis": "VERDICT: APPROVED\nGood."}
+            with patch("triad.triad_engine.Path.cwd", return_value=repo_dir):
+                with patch("triad.competition.query_competition_council", return_value=session):
+                    with patch("sys.stdout", new=io.StringIO()):
+                        _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
+            self.assertTrue(getattr(args, "_validated_tree", None))
+
     def test_worktree_provisions_and_deprovisions_node_modules(self):
         """Verify provision_worktree_dependencies zero-copies node_modules and deprovision cleans it safely."""
         from triad.worktree import provision_worktree_dependencies, deprovision_worktree_dependencies
@@ -5638,13 +5729,41 @@ exit 0
                         self.assertEqual(cm.exception.code, 1)
 
             # 1. Patch file must be persisted
-            patch_file = repo / ".triad_proposed_fix.patch"
-            self.assertTrue(patch_file.exists(), "Proposed fix must be saved to .triad_proposed_fix.patch")
+            patch_file = repo / ".git" / "triad-review" / "triad_proposed_fix.patch"
+            self.assertTrue(patch_file.exists(), "Proposed fix must be saved to .git/triad-review/triad_proposed_fix.patch")
             self.assertEqual(patch_file.read_text(encoding="utf-8"), fake_fix)
+            self.assertFalse((repo / ".triad_proposed_fix.patch").exists(), "Proposed fix must not be written into the working tree")
+            self.assertFalse((repo / "triad_proposed_fix.patch").exists())
 
             # 2. Working tree file MUST NOT have been mutated in place!
             self.assertEqual(test_file.read_bytes(), orig_test_bytes, "Direct execution must NEVER mutate working directory files in place")
 
+
+    def test_proposed_fix_patch_does_not_follow_planted_symlink(self):
+        """P10: a symlink pre-planted at the destination is replaced, never written through; nothing lands in the working tree."""
+        from triad.triad_engine import write_proposed_fix_patch
+
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as victim_dir:
+            repo = Path(td)
+            subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
+            victim = Path(victim_dir) / "victim.txt"
+            victim.write_text("ORIGINAL", encoding="utf-8")
+            review_dir = repo / ".git" / "triad-review"
+            review_dir.mkdir()
+            dest = review_dir / "triad_proposed_fix.patch"
+            try:
+                os.symlink(str(victim), str(dest))
+            except (OSError, NotImplementedError, AttributeError):
+                self.skipTest("symlinks not available")
+
+            written = write_proposed_fix_patch(repo, "diff --git a/x b/x\n")
+
+            self.assertEqual(Path(written).resolve(), dest.resolve())
+            self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL")
+            self.assertFalse(dest.is_symlink())
+            self.assertEqual(dest.read_text(encoding="utf-8"), "diff --git a/x b/x\n")
+            self.assertEqual([p.name for p in repo.iterdir()], [".git"])
+            self.assertEqual([p.name for p in dest.parent.glob("*.tmp")], [])
 
     def test_gate_with_provisioned_node_modules_without_gitignore(self):
         """[Codex R13 Finding 1] Verify _run_gate succeeds with provisioned node_modules even when .gitignore is absent."""
@@ -6152,5 +6271,4 @@ exit 0
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
 

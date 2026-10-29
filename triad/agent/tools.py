@@ -10,11 +10,10 @@ Follows the agy/Claude Code permission model:
 
 import os
 import re
-import glob
 import subprocess
 import fnmatch
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Optional
 
 DENIED_SECRET_PATTERNS = {
     ".env", ".env.local", "id_rsa", "id_ed25519", "auth.json",
@@ -270,7 +269,7 @@ class ToolRegistry:
         try:
             proc = subprocess.Popen(
                 command,
-                shell=True,
+                shell=True,  # nosec B602 - user-confirmed local tool, not an untrusted benchmark patch
                 cwd=str(self.workspace_root),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
