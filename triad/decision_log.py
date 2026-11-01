@@ -85,6 +85,7 @@ def add_block(
     supersedes: Optional[str] = None,
     project: Optional[str] = None,
     agent: Optional[str] = None,
+    commit: Optional[str] = None,
     log_path: Optional[Path] = None,
 ) -> dict:
     log_path = log_path or _default_log_path()
@@ -92,6 +93,10 @@ def add_block(
 
     project = project or _git_root(Path.cwd()) or Path.cwd().name
     parent = _last_block(log_path, project)
+
+    actions = list(actions or [])
+    if commit:
+        actions.append({"type": "commit", "sha": commit})
 
     block = {
         "id": uuid.uuid4().hex[:12],
@@ -101,7 +106,7 @@ def add_block(
         "parent": parent["id"] if parent else None,
         "intent": intent,
         "reasoning": reasoning,
-        "actions": actions or [],
+        "actions": actions,
         "verification": verification,
         "touches": touches or [],
         "supersedes": supersedes,
@@ -174,8 +179,14 @@ def _cmd_add(args: argparse.Namespace) -> int:
         supersedes=args.supersedes,
         project=args.project,
         agent=args.agent,
+        commit=args.commit,
     )
     print(format_block(block))
+    if not args.commit:
+        print(
+            f"\nTip: tag the commit that implements this with a trailer so git and the "
+            f"ledger point at each other:\n  Decision-Ledger: {block['id']}"
+        )
     return 0
 
 
@@ -215,6 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("--supersedes", default=None, help="ID of a prior block this corrects")
     p_add.add_argument("--project", default=None, help="Project name override")
     p_add.add_argument("--agent", default=None, help="Agent name override")
+    p_add.add_argument("--commit", default=None, help="Commit SHA this block corresponds to (links block -> commit)")
     p_add.set_defaults(func=_cmd_add)
 
     p_query = sub.add_parser("query", help="Search the decision ledger")
