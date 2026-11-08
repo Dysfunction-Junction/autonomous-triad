@@ -56,32 +56,21 @@ ADVISOR_CALLS_LOG = LOGS_DIR / "advisor_calls.jsonl"
 LIMIT_MARKERS = ("session limit", "rate limit", "usage limit")
 TEST_ROLES = frozenset({"test", "mock"})
 
-# Task-specific prioritized advisor ordering for token efficiency & quality alignment across all onboard clients
-TASK_ADVISOR_PRIORITY: Dict[str, List[str]] = {
-    # Structural design, invariants, database schemas, security -> Claude 3.7 & Antigravity (2M context) lead
-    "architecture": ["claude", "antigravity", "codex", "nous", "ollama"],
-    # Deep algorithmic reasoning, complex state machines, difficult logic -> Codex (gpt-6-astra) leads
-    "reasoning": ["codex", "claude", "antigravity", "nous", "ollama"],
-    # High-volume scraping, HTML/DOM parsing, text extraction -> Ollama (local) & Nous Flash lead ($0 cost)
-    "scraping": ["ollama", "nous", "antigravity", "codex", "claude"],
-    # Filesystem & path browsing, directory exploration -> Ollama (local) & Nous Flash lead
-    "browsing": ["ollama", "nous", "antigravity", "codex", "claude"],
-    # Code review & verification -> Claude first, then Codex, then Antigravity
-    "coding": ["claude", "codex", "antigravity", "nous", "ollama"],
-    # Micro-tasks (commit messages, docstrings, formatting) -> Ollama local first, then Nous Flash
-    "micro": ["ollama", "nous", "antigravity", "claude", "codex"],
-    # General queries -> default configuration order
-    "general": ["claude", "codex", "antigravity", "nous", "ollama"],
-}
+_STRENGTH_WARNED: set = set()
+
+
+def dispatch_allowed(advisor: Dict[str, Any]) -> bool:
+    """Env kill switches. Grok is skipped when TRIAD_GROK is 0/false/no/off."""
+    name = str(advisor.get("name") or "").lower()
+    if name == "grok":
+        raw = os.environ.get("TRIAD_GROK", "").strip().lower()
+        if raw in ("0", "false", "no", "off"):
+            return False
+    return True
 
 
 def rank_advisors_for_task(advisors: List[Dict[str, Any]], task: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Ranks candidate advisors dynamically based on task profile and token efficiency.
-    Ensures high-token scraping/browsing tasks default to $0 local/flash tiers,
-    while architectural and deep reasoning tasks default to high-capacity reasoning models.
-    Preserves config priority order for general or unclassified tasks.
-    """
+    """Rank by lane strengths. Missing map = 0.5 then priority. Strength 0 is excluded."""
     def _safe_priority(adv: Dict[str, Any]) -> int:
         try:
             val = adv.get("priority")
@@ -89,19 +78,35 @@ def rank_advisors_for_task(advisors: List[Dict[str, Any]], task: Optional[str] =
         except (ValueError, TypeError):
             return 99
 
-    norm_task = (task or "").strip().lower()
-    if not norm_task or norm_task in ("general", "auto") or norm_task not in TASK_ADVISOR_PRIORITY:
-        return sorted(advisors, key=_safe_priority)
+    norm = (task or "").strip().lower()
+    use_lane = bool(norm) and norm not in ("general", "auto")
 
-    preferred_order = TASK_ADVISOR_PRIORITY[norm_task]
-    order_map = {name: idx for idx, name in enumerate(preferred_order)}
+    def strength(adv: Dict[str, Any]) -> float:
+        raw = adv.get("strengths")
+        if not isinstance(raw, dict):
+            return 0.5
+        if norm not in raw:
+            return 0.5
+        try:
+            return float(raw[norm])
+        except (TypeError, ValueError):
+            name = str(adv.get("name") or "")
+            if name and name not in _STRENGTH_WARNED:
+                print(f"[Triad] non-numeric strength for {name}.{norm}; excluding", file=sys.stderr)
+                _STRENGTH_WARNED.add(name)
+            return 0.0
 
-    def sort_key(adv: Dict[str, Any]) -> Tuple[int, int]:
-        name = str(adv.get("name") or "").lower()
-        task_rank = order_map.get(name, 90)
-        return (task_rank, _safe_priority(adv))
-
-    return sorted(advisors, key=sort_key)
+    scored = []
+    for adv in advisors:
+        if not use_lane:
+            scored.append((0.0, _safe_priority(adv), adv))
+            continue
+        score = strength(adv)
+        if score <= 0:
+            continue
+        scored.append((-score, _safe_priority(adv), adv))
+    scored.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in scored]
 
 
 def test_advisors_allowed() -> bool:
@@ -923,6 +928,10 @@ def query_configured_advisor(
         skipped = []
         for adv in advisors:
             name = str(adv.get("name") or "unknown")
+            if not dispatch_allowed(adv):
+                skipped.append(f"{name}: dispatch disabled")
+                print(f"[Triad] Skipping {name} (dispatch disabled)", file=sys.stderr)
+                continue
             if is_circuit_open(name):
                 rem = int(circuit_remaining(name))
                 reason = circuit_reason(name) or "cooldown"
@@ -974,6 +983,8 @@ def query_configured_advisor(
     advisor = get_active_advisor(advisor_name, config_path=config_path)
     if not advisor:
         return f"[Error: Advisor '{advisor_name}' not found in configuration]"
+    if not dispatch_allowed(advisor):
+        return f"[Error: {advisor_name} dispatch disabled (TRIAD_GROK=0)]"
 
     raw_adv_timeout = advisor.get("timeout")
     if raw_adv_timeout is None or raw_adv_timeout == "":

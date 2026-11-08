@@ -550,13 +550,34 @@ def cmd_review(args, env: Optional[Dict[str, str]] = None):
         prompt = " ".join(prompt).strip()
     prompt = prompt or "Review this git diff for edge cases, subtle bugs, type soundness, and architectural regressions."
     engine = getattr(args, "engine", "auto")
+    task = getattr(args, "task", "auto")
+    if task == "auto":
+        task = "coding"
+    try:
+        from triad.intent_engine import is_high_stakes
+    except ImportError:
+        from intent_engine import is_high_stakes
+    high_stakes = is_high_stakes(f"{prompt}\n{diff_content}")
+    if high_stakes and task in ("micro", "scraping", "browsing"):
+        task = "coding"
     competition = getattr(args, "competition", False) or getattr(args, "adversarial", False)
+    if high_stakes and engine == "auto":
+        competition = True
     if competition:
-        adv_pair = ("mock", "mock") if engine == "mock" else ("claude", "codex")
+        if engine == "mock":
+            adv_pair: Optional[Tuple[str, str]] = ("mock", "mock")
+        elif engine == "auto":
+            adv_pair = None
+        else:
+            adv_pair = ("claude", "codex")
         is_adv = bool(getattr(args, "adversarial", False))
         mode_desc = "Adversarial Red/Blue Arena" if is_adv else "Concurrent Dual Advisors"
-        print(f"[Triad Competition Mode] Evaluating diff via {mode_desc} ({adv_pair[0]} vs {adv_pair[1]})...")
-        session = query_competition_council(prompt, diff=diff_content, mode="review_diff", advisor_names=adv_pair, adversarial=is_adv)
+        pair_label = adv_pair if adv_pair is not None else f"by-lane:{task}"
+        print(f"[Triad Competition Mode] Evaluating diff via {mode_desc} ({pair_label})...")
+        session = query_competition_council(
+            prompt, diff=diff_content, mode="review_diff", advisor_names=adv_pair,
+            adversarial=is_adv, task=task,
+        )
         synth = session.get("synthesis", "")
         print("\n" + synth)
         if is_adv:
@@ -567,10 +588,6 @@ def cmd_review(args, env: Optional[Dict[str, str]] = None):
         elif session.get("status") == "degraded" or not session.get("quorum_met"):
             print("\n⚠️ [Competition Mode Warning] Review ran in degraded mode (quorum not met; single-advisor fallback)", file=sys.stderr)
         return
-
-    task = getattr(args, "task", "auto")
-    if task == "auto":
-        task = "coding"
     print(f"[Triad] Reviewing {len(diff_content.splitlines())} diff lines via Advisory Council (task={task}, engine={engine})...\n")
     resp = query_advisory_council(prompt, diff=diff_content, mode="review_diff", engine=engine, task=task)
     print(resp)
@@ -594,21 +611,38 @@ def cmd_consult(args):
             context = f.read()
 
     engine = getattr(args, "engine", "auto")
+    task = getattr(args, "task", "auto")
+    if task == "auto":
+        task = "architecture"
+    try:
+        from triad.intent_engine import is_high_stakes
+    except ImportError:
+        from intent_engine import is_high_stakes
+    high_stakes = is_high_stakes(f"{prompt}\n{context}")
+    if high_stakes and task in ("micro", "scraping", "browsing"):
+        task = "coding"
     competition = getattr(args, "competition", False) or getattr(args, "adversarial", False)
+    if high_stakes and engine == "auto":
+        competition = True
     if competition:
-        adv_pair = ("mock", "mock") if engine == "mock" else ("claude", "codex")
+        if engine == "mock":
+            adv_pair: Optional[Tuple[str, str]] = ("mock", "mock")
+        elif engine == "auto":
+            adv_pair = None
+        else:
+            adv_pair = ("claude", "codex")
         is_adv = bool(getattr(args, "adversarial", False))
         mode_desc = "Adversarial Red/Blue Arena" if is_adv else "Concurrent Dual Advisors"
-        print(f"[Triad Competition Mode] Consulting {mode_desc} ({adv_pair[0]} vs {adv_pair[1]})...")
-        session = query_competition_council(prompt, context=context, mode="architect", advisor_names=adv_pair, adversarial=is_adv)
+        pair_label = adv_pair if adv_pair is not None else f"by-lane:{task}"
+        print(f"[Triad Competition Mode] Consulting {mode_desc} ({pair_label})...")
+        session = query_competition_council(
+            prompt, context=context, mode="architect", advisor_names=adv_pair,
+            adversarial=is_adv, task=task,
+        )
         print("\n" + session["synthesis"])
         if is_adv:
             _handle_adversarial_session_result(session)
         return
-
-    task = getattr(args, "task", "auto")
-    if task == "auto":
-        task = "architecture"
 
     print(f"[Triad] Consulting Advisory Council (task={task}, engine={engine})...\n")
     resp = query_advisory_council(prompt, context=context, mode="architect", engine=engine, task=task)
@@ -641,21 +675,38 @@ def cmd_debug(args):
             context = f.read()
 
     engine = getattr(args, "engine", "auto")
+    task = getattr(args, "task", "auto")
+    if task == "auto":
+        task = "coding"
+    try:
+        from triad.intent_engine import is_high_stakes
+    except ImportError:
+        from intent_engine import is_high_stakes
+    high_stakes = is_high_stakes(f"{error}\n{context}")
+    if high_stakes and task in ("micro", "scraping", "browsing"):
+        task = "coding"
     competition = getattr(args, "competition", False) or getattr(args, "adversarial", False)
+    if high_stakes and engine == "auto":
+        competition = True
     if competition:
-        adv_pair = ("mock", "mock") if engine == "mock" else ("claude", "codex")
+        if engine == "mock":
+            adv_pair: Optional[Tuple[str, str]] = ("mock", "mock")
+        elif engine == "auto":
+            adv_pair = None
+        else:
+            adv_pair = ("claude", "codex")
         is_adv = bool(getattr(args, "adversarial", False))
         mode_desc = "Adversarial Red/Blue Arena" if is_adv else "Concurrent Dual Advisors"
-        print(f"[Triad Competition Mode] Diagnosing error via {mode_desc} ({adv_pair[0]} vs {adv_pair[1]})...")
-        session = query_competition_council(error, context=context, mode="debug", advisor_names=adv_pair, adversarial=is_adv)
+        pair_label = adv_pair if adv_pair is not None else f"by-lane:{task}"
+        print(f"[Triad Competition Mode] Diagnosing error via {mode_desc} ({pair_label})...")
+        session = query_competition_council(
+            error, context=context, mode="debug", advisor_names=adv_pair,
+            adversarial=is_adv, task=task,
+        )
         print("\n" + session["synthesis"])
         if is_adv:
             _handle_adversarial_session_result(session)
         return
-
-    task = getattr(args, "task", "auto")
-    if task == "auto":
-        task = "coding"
 
     print(f"[Triad] Diagnosing with Advisory Council (task={task}, engine={engine})...\n")
     resp = query_advisory_council(error, context=context, mode="debug", engine=engine, task=task)

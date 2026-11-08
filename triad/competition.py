@@ -14,11 +14,17 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, Tuple, List, Optional
 
 try:
-    from triad.advisor_manager import query_configured_advisor, get_advisors, is_test_advisor, advisor_is_ready
+    from triad.advisor_manager import (
+        query_configured_advisor, get_advisors, is_test_advisor, advisor_is_ready,
+        dispatch_allowed, rank_advisors_for_task,
+    )
     from triad.procutil import is_failed_advisor_response, strip_diff_bloat
     from triad.circuit import is_circuit_open
 except ImportError:
-    from advisor_manager import query_configured_advisor, get_advisors, is_test_advisor, advisor_is_ready
+    from advisor_manager import (
+        query_configured_advisor, get_advisors, is_test_advisor, advisor_is_ready,
+        dispatch_allowed, rank_advisors_for_task,
+    )
     from procutil import is_failed_advisor_response, strip_diff_bloat
     from circuit import is_circuit_open
 
@@ -50,36 +56,49 @@ def _ready_production_names() -> List[str]:
         name = str(a.get("name") or "")
         if not name or is_circuit_open(name):
             continue
+        if not dispatch_allowed(a):
+            continue
         ok, _ = advisor_is_ready(a)
         if ok:
             names.append(name)
     return names
 
 
-def select_competition_pair(requested: Tuple[str, str] = DEFAULT_ADVISOR_PAIR) -> Tuple[Tuple[str, str], bool]:
+def select_competition_pair(
+    requested: Optional[Tuple[str, str]] = DEFAULT_ADVISOR_PAIR,
+    *,
+    task: Optional[str] = None,
+) -> Tuple[Tuple[str, str], bool]:
     """
     Resolve which two advisors should compete.
 
-    If both requested advisors are enabled they are used verbatim. Otherwise the two
-    highest-priority enabled non-mock advisors are substituted so a disabled ``claude``
-    or ``codex`` entry in advisors.json no longer silently degrades competition mode
-    into two "advisor not found" errors.
-
-    Open circuits and unreadiness (missing binary / closed port) are skipped so
-    competition does not spend a full timeout on a known-dead advisor.
-
-    Returns ``(pair, quorum_met)``; ``quorum_met`` is False when fewer than two
-    non-mock advisors are enabled or ready.
+    Explicit ``requested`` pairs keep today's backfill algorithm (still filtered by
+    ``dispatch_allowed``). ``requested is None`` ranks by lane strengths for ``task``.
     """
-    if "mock" in requested:
+    if requested is not None and "mock" in requested:
         return requested, True
 
     enabled = [a for a in get_advisors(enabled_only=True) if not is_test_advisor(a)]
-    enabled_names = [a.get("name", "") for a in enabled]
-    if len(enabled_names) < 2:
-        return requested, False
+    if len(enabled) < 2:
+        fallback = requested or DEFAULT_ADVISOR_PAIR
+        return fallback, False
 
     ready_names = _ready_production_names()
+
+    if requested is None:
+        lane = (task or "coding").strip().lower()
+        if lane in ("", "auto", "general"):
+            lane = "coding"
+        pool = [
+            a for a in get_advisors(enabled_only=True, production_only=True)
+            if str(a.get("name") or "") in ready_names
+        ]
+        ranked = rank_advisors_for_task(pool, lane)
+        names = [str(a.get("name") or "") for a in ranked if a.get("name")]
+        if len(names) >= 2:
+            return (names[0], names[1]), True
+        return DEFAULT_ADVISOR_PAIR, False
+
     pair: List[str] = []
     for name in requested:
         if name in ready_names and name not in pair:
@@ -93,6 +112,23 @@ def select_competition_pair(requested: Tuple[str, str] = DEFAULT_ADVISOR_PAIR) -
     if len(pair) >= 2:
         return (pair[0], pair[1]), True
     return requested, False
+
+
+def select_judge(pair: Tuple[str, str], task: Optional[str] = "judge") -> Optional[str]:
+    """Best ready judge outside the competing pair. Strength 0 is excluded by the ranker."""
+    lane = (task or "judge").strip().lower() or "judge"
+    exclude = {pair[0], pair[1]}
+    pool = [
+        a for a in get_advisors(enabled_only=True, production_only=True)
+        if str(a.get("name") or "") not in exclude
+        and str(a.get("name") or "") in _ready_production_names()
+    ]
+    ranked = rank_advisors_for_task(pool, lane)
+    for adv in ranked:
+        name = str(adv.get("name") or "")
+        if name:
+            return name
+    return None
 
 
 def _label_for(name: str) -> str:
@@ -251,8 +287,9 @@ def query_competition_council(
     diff: str = None,
     mode: str = "review_diff",
     timeout: int = 120,
-    advisor_names: Tuple[str, str] = ("claude", "codex"),
+    advisor_names: Optional[Tuple[str, str]] = ("claude", "codex"),
     adversarial: bool = False,
+    task: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Executes two advisors and synthesizes their assessments.
@@ -277,7 +314,9 @@ def query_competition_council(
     results = {}
 
     # Resolve the competing pair against the live config (quorum + substitution)
-    (adv1_name, adv2_name), quorum_met = select_competition_pair(tuple(advisor_names))
+    requested = None if advisor_names is None else tuple(advisor_names)
+    (adv1_name, adv2_name), quorum_met = select_competition_pair(requested, task=task)
+    pair_task = (task or "coding")
     if not quorum_met:
         ready_names = _ready_production_names()
         print(f"[Triad Competition Mode Warning] Fewer than 2 ready non-mock advisors ({len(ready_names)} ready). Falling back to single advisor.")
@@ -300,9 +339,11 @@ def query_competition_council(
             "adversarial": adversarial,
             "status": "error" if is_fail else "degraded",
             "verdict": None,
+            "judge": None,
+            "pair_task": pair_task,
         }
-    if (adv1_name, adv2_name) != tuple(advisor_names):
-        print(f"[Triad Competition Mode] Requested pair {advisor_names} not fully enabled; competing with ({adv1_name}, {adv2_name}).")
+    if requested is not None and (adv1_name, adv2_name) != requested:
+        print(f"[Triad Competition Mode] Requested pair {requested} not fully enabled; competing with ({adv1_name}, {adv2_name}).")
 
     if adversarial:
         # Sequential Blue -> Red: Blue Team generates proposal/defense
@@ -409,6 +450,7 @@ def query_competition_council(
     # Synthesis uses the remaining timeout budget, clamped between 30s and 90s
     rem_synth = _rem_timeout()
     synth_timeout = max(min(rem_synth if rem_synth > 0 else timeout, 90), 30)
+    synth_engine = None
     if failed1 and failed2:
         synthesis = (
             f"[Competition Error] Both advisors failed; skipping synthesis.\n"
@@ -416,27 +458,37 @@ def query_competition_council(
         )
     else:
         if adversarial:
-            # Blue never judges itself. If both mock requested, use mock; otherwise prefer an independent 3rd ready advisor; fallback to Red
+            # Blue never judges itself. Prefer an independent judge by lane strength.
             if adv1_name == adv2_name == "mock":
                 synth_engine = "mock"
             else:
-                third = next((n for n in _ready_production_names() if n not in (adv1_name, adv2_name)), None)
-                synth_engine = third or (adv2_name if not failed2 else adv1_name)
+                synth_engine = select_judge((adv1_name, adv2_name)) or (
+                    adv2_name if not failed2 else adv1_name
+                )
             synth_prompt = build_adversarial_synthesis_prompt(
                 prompt, resp1, resp2, context=context, diff=diff,
                 blue_label=f"Blue Team ({_label_for(adv1_name)})",
                 red_label=f"Red Team ({_label_for(adv2_name)})",
             )
         else:
-            synth_engine = adv2_name if failed1 and not failed2 else adv1_name
+            synth_engine = select_judge((adv1_name, adv2_name))
+            if not synth_engine:
+                synth_engine = adv2_name if failed1 and not failed2 else adv1_name
             synth_prompt = build_synthesis_prompt(
                 prompt, resp1, resp2, context=context, diff=diff,
                 adv1_label=_label_for(adv1_name), adv2_label=_label_for(adv2_name),
             )
         synthesis = query_configured_advisor(synth_engine, synth_prompt, mode="general", timeout=synth_timeout)
         if is_failed_advisor_response(synthesis):
-            other = adv1_name if synth_engine == adv2_name else adv2_name
-            synthesis = query_configured_advisor(other, synth_prompt, mode="general", timeout=synth_timeout)
+            # Retry the successful competitor once. Never the judge again. Never a fourth model.
+            if not failed1 and adv1_name != synth_engine:
+                other = adv1_name
+            elif not failed2 and adv2_name != synth_engine:
+                other = adv2_name
+            else:
+                other = adv2_name if adv1_name == synth_engine else adv1_name
+            if other != synth_engine:
+                synthesis = query_configured_advisor(other, synth_prompt, mode="general", timeout=synth_timeout)
 
     elapsed = time.time() - start_time
     is_synth_failed = is_failed_advisor_response(synthesis)
@@ -468,6 +520,8 @@ def query_competition_council(
         "adversarial": adversarial,
         "status": status,
         "verdict": verdict,
+        "judge": synth_engine if not (failed1 and failed2) else None,
+        "pair_task": pair_task,
     }
 
     # 3. Log to telemetry file
