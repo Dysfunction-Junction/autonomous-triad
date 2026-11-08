@@ -1,8 +1,6 @@
 """Unit tests for Triad Agent, RouteLLM Router, Quota Tracker, and Tools."""
 
-import os
 import tempfile
-import time
 from pathlib import Path
 
 from triad.agent.tracker import RollingWindowTracker, DEFAULT_SOFT_LIMIT

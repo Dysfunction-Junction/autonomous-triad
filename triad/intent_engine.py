@@ -675,7 +675,7 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
                 return
             if args is not None:
                 existing_ctx = getattr(args, "context", "") or ""
-                setattr(args, "context", (existing_ctx + f"\nDiscovered local files:\n" + "\n".join(paths[:10])).strip())
+                setattr(args, "context", (existing_ctx + "\nDiscovered local files:\n" + "\n".join(paths[:10])).strip())
         else:
             print(f"[Triad Local Browser]: No matching file paths found in workspace for query: '{raw_prompt.strip()}'.")
             if is_pure_locator:

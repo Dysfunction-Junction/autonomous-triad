@@ -5926,9 +5926,9 @@ def cmd_sync(args):
     Ensures zero drift between repository development and the live user execution environment.
     """
     try:
-        from triad.sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
+        from triad.sync_manager import run_full_sync
     except ImportError:
-        from sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
+        from sync_manager import run_full_sync
 
     apply_flag = getattr(args, "apply", False)
     dry_run = getattr(args, "dry_run", False) or not apply_flag
@@ -6005,7 +6005,7 @@ def cmd_sync(args):
 
     # Hooks
     if report.get("hooks"):
-        print(f"[4] Active Repository Pre-Commit Hooks:")
+        print("[4] Active Repository Pre-Commit Hooks:")
         for h in report["hooks"]:
             status_tag = f"[{h['hook_status'].upper()}]"
             action_note = f" -> {h['action_taken']}" if h.get("action_taken") != "none" else ""

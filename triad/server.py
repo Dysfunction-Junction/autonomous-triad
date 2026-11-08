@@ -809,7 +809,6 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
         envelope_id = body.get("id", "")
         sender = body.get("from", "")
         action = body.get("action", "")
-        capability = body.get("capability", "")
         payload = body.get("payload") or {}
 
         if action == "ping":

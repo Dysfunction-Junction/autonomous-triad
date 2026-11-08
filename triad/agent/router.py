@@ -16,14 +16,11 @@ References & Prior Art:
   Tier 3: Local Hardware (llama-server :8080 qwen3 / qwen2.5-coder) [Zero Cost Local]
 """
 
-import os
 import re
-import urllib.request
-import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Tuple
 
 try:
     from triad.agent.tracker import RollingWindowTracker

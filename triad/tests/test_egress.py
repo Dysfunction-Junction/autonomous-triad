@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from triad.egress import (
     filter_diff,
     memory_query_allowed,
     redact,
-    sanitize_egress,
 )
 from triad.advisor_manager import build_advisor_prompt
 
