@@ -202,6 +202,12 @@ def query_nous(
     if not token:
         return False, "Error: No Nous credentials found (checked NOUS_API_KEY and Hermes auth.json)", "", False
 
+    try:
+        from triad.egress import sanitize_egress
+    except ImportError:
+        from egress import sanitize_egress
+    prompt = sanitize_egress(prompt)
+
     task_category = detect_task_category(prompt, mode=mode, task=task)
     cascade = TASK_MODEL_CASCADES.get(task_category, TASK_MODEL_CASCADES["general"])
 

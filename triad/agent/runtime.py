@@ -195,8 +195,17 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                     return text, tier
 
                 elif tier == ModelTier.TIER_3_LOCAL:
+                    transcript = "\n".join(m.get("content", "") for m in messages)
+                    try:
+                        from triad.paths import exceeds_context_budget, llama_cpp_url
+                    except ImportError:
+                        from paths import exceeds_context_budget, llama_cpp_url
+                    budget = exceeds_context_budget(transcript, max_tokens=1024)
+                    if budget:
+                        decision.reason = budget
+                        raise RuntimeError(budget)
                     text = self._call_http_openai_compatible(
-                        base_url=LOCAL_LLAMA_URL,
+                        base_url=llama_cpp_url().rstrip("/") + "/v1",
                         model="default",
                         messages=messages,
                         timeout=120,

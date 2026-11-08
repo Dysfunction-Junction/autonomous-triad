@@ -478,6 +478,71 @@ class TestCodexAuthDecode(unittest.TestCase):
         if os.name == "nt":
             self.assertIn("exceeds windows argv limit", res.lower())
 
+    def test_execute_advisor_prompt_file_keeps_diff_off_argv(self):
+        from triad.advisor_manager import _execute_single_advisor_raw
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["stdin"] = kwargs.get("stdin")
+            prompt_path = None
+            for arg in cmd:
+                if isinstance(arg, str) and arg.endswith(".txt") and "triad_prompt_" in arg:
+                    prompt_path = arg
+                    break
+            captured["prompt_path"] = prompt_path
+            if prompt_path and os.path.exists(prompt_path):
+                with open(prompt_path, encoding="utf-8") as fh:
+                    captured["file_body"] = fh.read()
+
+            class FakeProc:
+                returncode = 0
+
+                def communicate(self, input=None, timeout=None):
+                    captured["stdin_input"] = input
+                    return ("VERDICT: APPROVED\n", "")
+
+                @property
+                def pid(self):
+                    return 0
+
+            return FakeProc()
+
+        fake_advisor = {
+            "name": "file_tool",
+            "binary_path": sys.executable,
+            "input_mode": "file",
+            "output_mode": "stdout",
+            "execution_flags": ["--prompt-file", "{prompt_file}"],
+        }
+        huge_diff = "diff --git a/foo.py b/foo.py\n" + ("+line of code UNIQUE_DIFF_BODY\n" * 3000)
+        with patch("triad.advisor_manager.subprocess.Popen", side_effect=fake_popen):
+            with patch("triad.advisor_manager.kill_process_tree"):
+                res = _execute_single_advisor_raw(
+                    fake_advisor, "review diff", diff=huge_diff, mode="review_diff"
+                )
+        self.assertIn("VERDICT: APPROVED", res)
+        joined = " ".join(str(a) for a in captured.get("cmd", []))
+        self.assertIn("--prompt-file", joined)
+        self.assertNotIn("UNIQUE_DIFF_BODY", joined)
+        self.assertIsNotNone(captured.get("prompt_path"))
+        self.assertIn("UNIQUE_DIFF_BODY", captured.get("file_body", ""))
+        self.assertIsNone(captured.get("stdin_input"))
+        self.assertFalse(os.path.exists(captured["prompt_path"]))
+
+    def test_execute_advisor_unknown_input_mode_does_not_spawn(self):
+        from triad.advisor_manager import _execute_single_advisor_raw
+        fake_advisor = {
+            "name": "bad_mode",
+            "binary_path": sys.executable,
+            "input_mode": "telepathy",
+            "execution_flags": [],
+        }
+        with patch("triad.advisor_manager.subprocess.Popen") as popen:
+            res = _execute_single_advisor_raw(fake_advisor, "hello")
+        self.assertIn("unrecognized input_mode", res.lower())
+        popen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
