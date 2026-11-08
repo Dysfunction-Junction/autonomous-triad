@@ -248,8 +248,8 @@
         "scraping": 0,
         "browsing": 0
       },
-      "enabled": false,
-      "dispatch_status": "pending_smoke",
+      "enabled": true,
+      "dispatch_status": "headless_ready",
       "budget_policy": "Subscription CLI only. Same token restrictions as other agents: sanitized diffs, MCP and write and shell denied, existing cooldowns, two-live-advisor cap. No metered xAI fallback unless TRIAD_GROK_ALLOW_API_KEY is set by the owner."
     },
     {

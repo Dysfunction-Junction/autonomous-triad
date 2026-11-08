@@ -612,6 +612,10 @@ def _execute_single_advisor_raw(
         env.pop("TRIAD_TASK", None)
     for k, v in advisor.get("env", {}).items():
         env[k] = expand_env_value(str(k), str(v))
+    if str(advisor.get("name") or "").lower() == "grok":
+        allow = os.environ.get("TRIAD_GROK_ALLOW_API_KEY", "").strip().lower()
+        if allow not in ("1", "true", "yes", "on"):
+            env.pop("XAI_API_KEY", None)
 
     started = time.monotonic()
     proc = None

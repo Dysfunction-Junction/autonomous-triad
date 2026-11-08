@@ -561,6 +561,55 @@ class TestCodexAuthDecode(unittest.TestCase):
         self.assertIn("unrecognized input_mode", res.lower())
         popen.assert_not_called()
 
+    def test_grok_argv_and_xai_key_stripped(self):
+        from triad.advisor_manager import _execute_single_advisor_raw, get_active_advisor
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["env"] = dict(kwargs.get("env") or {})
+
+            class FakeProc:
+                returncode = 0
+
+                def communicate(self, input=None, timeout=None):
+                    return ("VERDICT: APPROVED\n", "")
+
+                @property
+                def pid(self):
+                    return 0
+
+            return FakeProc()
+
+        grok = dict(get_active_advisor("grok") or {})
+        self.assertTrue(grok, "grok advisor must be configured")
+        grok["binary_path"] = sys.executable
+        grok["fallback_binary"] = None
+        with patch.dict(os.environ, {"XAI_API_KEY": "should-not-leak", "TRIAD_GROK": "1"}, clear=False):
+            with patch("triad.advisor_manager.subprocess.Popen", side_effect=fake_popen):
+                with patch("triad.advisor_manager.kill_process_tree"):
+                    with patch("triad.advisor_manager.resolve_binary", return_value=sys.executable):
+                        res = _execute_single_advisor_raw(grok, "say approved", mode="general")
+        self.assertIn("VERDICT: APPROVED", res)
+        joined = " ".join(str(a) for a in captured["cmd"])
+        self.assertIn("--prompt-file", joined)
+        self.assertIn("--permission-mode", joined)
+        self.assertIn("plan", joined)
+        self.assertIn("--max-turns", joined)
+        self.assertIn("1", joined)
+        self.assertIn("--no-subagents", joined)
+        self.assertIn("--disable-web-search", joined)
+        self.assertNotIn(" -p ", f" {joined} ")
+        self.assertNotIn("XAI_API_KEY", captured["env"])
+
+    def test_grok_kill_switch_skips_spawn(self):
+        from triad.advisor_manager import query_configured_advisor
+        with patch.dict(os.environ, {"TRIAD_GROK": "0"}, clear=False):
+            with patch("triad.advisor_manager.subprocess.Popen") as popen:
+                res = query_configured_advisor("grok", "hello")
+        self.assertIn("dispatch disabled", res.lower())
+        popen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
