@@ -229,7 +229,7 @@
         "--rules",
         "Advisory seat only. Do not call tools. Do not modify files, run commands, spawn agents, or use the network. Answer from the prompt alone.",
         "--disallowed-tools",
-        "read_file,hashline_read,grep,hashline_grep,list_dir,write,search_replace,hashline_edit,StrReplace,EditNotebook,Delete,run_terminal_cmd,run_terminal_command,web_search,web_fetch,task,spawn_subagent,Agent,get_task_output,get_command_or_subagent_output,wait_tasks,wait_commands_or_subagents,kill_task,kill_command_or_subagent,todo_write,image_gen,image_edit,GenerateImage,GenerateVideo,CreateGoal,UpdateGoal,XSearch,CallMcpTool,GetMcpTools,FetchMcpResource,ListMcpResources,AskQuestion,SwitchMode,CreatePlan,ReadLints,Await,Shell,enter_plan_mode,monitor,lsp,Execute,workflow"
+        "read_file,hashline_read,grep,hashline_grep,list_dir,write,search_replace,hashline_edit,StrReplace,EditNotebook,Delete,run_terminal_cmd,run_terminal_command,web_search,web_fetch,task,spawn_subagent,Agent,get_task_output,get_command_or_subagent_output,wait_tasks,wait_commands_or_subagents,kill_task,kill_command_or_subagent,todo_write,image_gen,image_edit,GenerateImage,GenerateVideo,CreateGoal,UpdateGoal,XSearch,CallMcpTool,GetMcpTools,FetchMcpResource,ListMcpResources,AskQuestion,ReadLints,Await,Shell,monitor,lsp,Execute,workflow"
       ],
       "input_mode": "file",
       "output_mode": "stdout",
