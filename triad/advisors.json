@@ -205,6 +205,54 @@
       "budget_policy": "Same owner token restrictions as other agents; targeted context, sanitized diffs, MCP stripping, existing cooldowns and shared two-live-advisor session cap. No metered fallback without owner approval."
     },
     {
+      "name": "grok",
+      "display_name": "Grok (xAI subscription CLI)",
+      "role": "production",
+      "binary_path": "{home}/.grok/bin/grok.exe",
+      "fallback_binary": "grok",
+      "priority": 7,
+      "execution_flags": [
+        "--prompt-file",
+        "{prompt_file}",
+        "--output-format",
+        "plain",
+        "--permission-mode",
+        "plan",
+        "--max-turns",
+        "1",
+        "--no-subagents",
+        "--disable-web-search",
+        "--no-wait-for-background",
+        "--no-auto-update",
+        "--cwd",
+        "{prompt_dir}",
+        "--rules",
+        "Advisory seat only. Do not call tools. Do not modify files, run commands, spawn agents, or use the network. Answer from the prompt alone.",
+        "--disallowed-tools",
+        "read_file,hashline_read,grep,hashline_grep,list_dir,write,search_replace,hashline_edit,StrReplace,EditNotebook,Delete,run_terminal_cmd,run_terminal_command,web_search,web_fetch,task,spawn_subagent,Agent,get_task_output,get_command_or_subagent_output,wait_tasks,wait_commands_or_subagents,kill_task,kill_command_or_subagent,todo_write,image_gen,image_edit,GenerateImage,GenerateVideo,CreateGoal,UpdateGoal,XSearch,CallMcpTool,GetMcpTools,FetchMcpResource,ListMcpResources,AskQuestion,SwitchMode,CreatePlan,ReadLints,Await,Shell,enter_plan_mode,monitor,lsp,Execute,workflow"
+      ],
+      "input_mode": "file",
+      "output_mode": "stdout",
+      "timeout": 180,
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "strengths": {
+        "architecture": 0.82,
+        "coding": 0.84,
+        "reasoning": 0.8,
+        "judge": 0.92,
+        "red_team": 0.92,
+        "long_context": 0.9,
+        "micro": 0,
+        "scraping": 0,
+        "browsing": 0
+      },
+      "enabled": false,
+      "dispatch_status": "pending_smoke",
+      "budget_policy": "Subscription CLI only. Same token restrictions as other agents: sanitized diffs, MCP and write and shell denied, existing cooldowns, two-live-advisor cap. No metered xAI fallback unless TRIAD_GROK_ALLOW_API_KEY is set by the owner."
+    },
+    {
       "name": "mock",
       "display_name": "Mock Test Advisor",
       "role": "test",
