@@ -1,8 +1,6 @@
 """Unit tests for Triad Agent, RouteLLM Router, Quota Tracker, and Tools."""
 
-import os
 import tempfile
-import time
 from pathlib import Path
 
 from triad.agent.tracker import RollingWindowTracker, DEFAULT_SOFT_LIMIT
@@ -112,7 +110,7 @@ def test_tool_registry():
         assert callable(tools.consult_architect)
 
 
-def test_router_default_local_orchestrator():
+def test_router_default_local_orchestrator(monkeypatch):
     router = ZeroCostRouter()
     # Default route should always be local compute (Tier 3)
     dec = router.select_route("Write a python script to parse CSV")
@@ -125,6 +123,26 @@ def test_router_default_local_orchestrator():
     # Explicit delegation to Chief Architect
     dec_architect = router.select_route("Major migration plan", force_tier="architect")
     assert dec_architect.selected_tier == ModelTier.TIER_1_PRIMARY
+
+    # F2: a prompt that cannot fit 90% of n_ctx skips the local tier.
+    monkeypatch.setattr("triad.paths.llama_n_ctx", lambda: 2048)
+    # Reset the process cache so the monkeypatch is visible through exceeds_context_budget.
+    import triad.paths as paths_mod
+    paths_mod._N_CTX_TRIED = False
+    paths_mod._N_CTX_CACHE = None
+    monkeypatch.setattr(paths_mod, "llama_n_ctx", lambda: 2048)
+    dec_budget = router.select_route("x" * 20000)
+    assert dec_budget.selected_tier == ModelTier.TIER_2_CLOUD_FREE
+    assert "context budget" in dec_budget.reason
+    assert dec_budget.fallback_chain == []
+
+
+def test_exceeds_context_budget_none_when_n_ctx_unknown(monkeypatch):
+    import triad.paths as paths_mod
+    paths_mod._N_CTX_TRIED = False
+    paths_mod._N_CTX_CACHE = None
+    monkeypatch.setattr(paths_mod, "llama_n_ctx", lambda: None)
+    assert paths_mod.exceeds_context_budget("hello world") is None
 
 
 def test_runtime_abort_current_turn(monkeypatch):

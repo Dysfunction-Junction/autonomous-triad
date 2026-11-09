@@ -15,7 +15,6 @@ Verifies:
 """
 
 import os
-import time
 import tempfile
 import unittest
 from pathlib import Path

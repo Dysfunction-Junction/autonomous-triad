@@ -8,7 +8,6 @@ Orchestrates multi-turn autonomous tool execution loops across the 3-tier zero-c
 
 import os
 import re
-import sys
 import json
 import time
 import urllib.request
@@ -18,11 +17,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Callable
 
 try:
-    from triad.agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, LOCAL_LLAMA_URL
+    from triad.agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH
     from triad.agent.tools import ToolRegistry
     from triad.agent.tracker import RollingWindowTracker
 except ImportError:
-    from agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, LOCAL_LLAMA_URL
+    from agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH
     from agent.tools import ToolRegistry
     from agent.tracker import RollingWindowTracker
 
@@ -119,7 +118,7 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
             data=json.dumps(payload).encode("utf-8"),
             headers=headers
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             data = json.loads(resp.read().decode("utf-8"))
             choice = data["choices"][0]
             msg = choice.get("message") or {}
@@ -195,8 +194,17 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                     return text, tier
 
                 elif tier == ModelTier.TIER_3_LOCAL:
+                    transcript = "\n".join(m.get("content", "") for m in messages)
+                    try:
+                        from triad.paths import exceeds_context_budget, llama_cpp_url
+                    except ImportError:
+                        from paths import exceeds_context_budget, llama_cpp_url
+                    budget = exceeds_context_budget(transcript, max_tokens=1024)
+                    if budget:
+                        decision.reason = budget
+                        raise RuntimeError(budget)
                     text = self._call_http_openai_compatible(
-                        base_url=LOCAL_LLAMA_URL,
+                        base_url=llama_cpp_url().rstrip("/") + "/v1",
                         model="default",
                         messages=messages,
                         timeout=120,

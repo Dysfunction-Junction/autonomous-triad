@@ -675,7 +675,7 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
                 return
             if args is not None:
                 existing_ctx = getattr(args, "context", "") or ""
-                setattr(args, "context", (existing_ctx + f"\nDiscovered local files:\n" + "\n".join(paths[:10])).strip())
+                setattr(args, "context", (existing_ctx + "\nDiscovered local files:\n" + "\n".join(paths[:10])).strip())
         else:
             print(f"[Triad Local Browser]: No matching file paths found in workspace for query: '{raw_prompt.strip()}'.")
             if is_pure_locator:
@@ -718,10 +718,15 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
             print(f"Ensure android_relay_runner.py is active in {ANDROID_RELAY_ENV}")
         else:
             print(f"✓ Android Relay port {PORT_HERMES_RELAY} is ONLINE.")
-        print(f"Forwarding device task to Hermes: {raw_prompt}")
+        try:
+            from triad.egress import sanitize_egress
+        except ImportError:
+            from egress import sanitize_egress
+        hermes_prompt = sanitize_egress(raw_prompt)
+        print(f"Forwarding device task to Hermes: {hermes_prompt}")
         if triad_engine.HERMES_PATH.exists():
             # Use -z (--oneshot) for script/pipeline single prompt execution
-            cmd = [str(triad_engine.HERMES_PATH), "-z", raw_prompt]
+            cmd = [str(triad_engine.HERMES_PATH), "-z", hermes_prompt]
             res = subprocess.run(cmd)
             return res.returncode
         else:
@@ -729,14 +734,24 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
             return 1
 
     if intent == "MEMORY":
-        print(f"[Triad -> Local Memory Hub]: Recalling context for '{raw_prompt}'...")
+        try:
+            from triad.egress import sanitize_egress, memory_query_allowed
+        except ImportError:
+            from egress import sanitize_egress, memory_query_allowed
+        mem_prompt = sanitize_egress(raw_prompt)
+        print(f"[Triad -> Local Memory Hub]: Recalling context for '{mem_prompt}'...")
         mem0_ran = False
         mem0_success = False
-        if MEM0_SCRIPT.exists():
+        if MEM0_SCRIPT.exists() and memory_query_allowed(mem_prompt):
             print("\n--- Mem0 Long-Term Memory Recall ---")
-            res = subprocess.run(["node", str(MEM0_SCRIPT), "search", raw_prompt])
+            res = subprocess.run(["node", str(MEM0_SCRIPT), "search", mem_prompt])
             mem0_ran = True
             mem0_success = (res.returncode == 0)
+        elif MEM0_SCRIPT.exists():
+            print("\n--- Mem0 Long-Term Memory Recall ---")
+            print("Skipped: query looks like a security finding (memory_query_allowed).")
+            mem0_ran = True
+            mem0_success = False
 
         print("\n--- PiecesOS Status ---")
         pieces_reachable = False

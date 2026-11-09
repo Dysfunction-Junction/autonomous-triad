@@ -9,9 +9,37 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from triad.competition import build_synthesis_prompt, query_competition_council, COUNCIL_SESSIONS_LOG
+from unittest.mock import patch
+
+from triad.competition import (
+    build_synthesis_prompt,
+    query_competition_council,
+    select_competition_pair,
+    select_judge,
+    COUNCIL_SESSIONS_LOG,
+)
 
 class TestCompetitionMode(unittest.TestCase):
+    def test_select_pair_by_lane_and_judge(self):
+        fake = [
+            {"name": "claude", "priority": 1, "enabled": True, "role": "production",
+             "strengths": {"coding": 0.95, "judge": 0.95}},
+            {"name": "codex", "priority": 2, "enabled": True, "role": "production",
+             "strengths": {"coding": 0.90, "judge": 0.85}},
+            {"name": "grok", "priority": 7, "enabled": True, "role": "production",
+             "strengths": {"coding": 0.84, "judge": 0.92}},
+            {"name": "antigravity", "priority": 3, "enabled": True, "role": "production",
+             "strengths": {"coding": 0.75, "judge": 0.70}},
+        ]
+        with patch("triad.competition.get_advisors", return_value=fake):
+            with patch("triad.competition.is_circuit_open", return_value=False):
+                with patch("triad.competition.advisor_is_ready", return_value=(True, "")):
+                    with patch("triad.competition.dispatch_allowed", return_value=True):
+                        pair, ok = select_competition_pair(None, task="coding")
+                        self.assertTrue(ok)
+                        self.assertEqual(pair, ("claude", "codex"))
+                        self.assertEqual(select_judge(pair), "grok")
+
     def test_build_synthesis_prompt_structure(self):
         prompt = "Review this diff"
         c1 = "Looks good, no issues found."

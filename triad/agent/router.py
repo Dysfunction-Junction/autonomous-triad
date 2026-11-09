@@ -16,14 +16,11 @@ References & Prior Art:
   Tier 3: Local Hardware (llama-server :8080 qwen3 / qwen2.5-coder) [Zero Cost Local]
 """
 
-import os
 import re
-import urllib.request
-import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Tuple
 
 try:
     from triad.agent.tracker import RollingWindowTracker
@@ -183,6 +180,23 @@ class ZeroCostRouter:
         # 2. RouteLLM Scoring & Thresholding (Triad Local Orchestrator Default)
         difficulty = self.classifier.score_prompt(prompt, context_length=context_length)
         threshold_c, threshold_reason = self.get_effective_threshold()
+
+        # F2: skip the local tier when the prompt cannot fit llama-server's n_ctx.
+        # Escalates to Nous free, never to a premium council seat.
+        try:
+            from triad.paths import exceeds_context_budget
+        except ImportError:
+            from paths import exceeds_context_budget
+        budget = exceeds_context_budget(prompt, max_tokens=1024)
+        if budget:
+            return RoutingDecision(
+                selected_tier=ModelTier.TIER_2_CLOUD_FREE,
+                model_name="stepfun/step-3.7-flash:free",
+                difficulty_score=round(difficulty, 3),
+                threshold_c=round(threshold_c, 3),
+                reason=f"Skipped local tier: {budget}",
+                fallback_chain=[],
+            )
 
         # Default: Triad handles conversation & routine tasks locally.
         # Chief Architect (Claude) is reserved for big decisions, explicit delegation, or consult_architect tool.

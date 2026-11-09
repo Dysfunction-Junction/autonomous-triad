@@ -129,6 +129,80 @@ PORT_NEO4J_BOLT = _safe_int_env("TRIAD_PORT_NEO4J_BOLT", _safe_int_env("NEO4J_BO
 PORT_LLAMA_SERVER = _safe_int_env("TRIAD_PORT_LLAMA_SERVER", 8080)
 PORT_OLLAMA = _safe_int_env("TRIAD_PORT_OLLAMA", 11434)
 
+# --- Local llama-server context budget (F2) -----------------------------------
+# Transcribed from autonomous-triad-v34 worktree text. Do not cherry-pick that branch.
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+_N_CTX_CACHE: Optional[int] = None
+_N_CTX_TRIED = False
+
+
+def validate_loopback_url(raw: str) -> str:
+    """Return ``raw`` without a trailing slash if it is plain http on loopback, else raise ValueError."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(raw)
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in LOOPBACK_HOSTS
+        or parts.username or parts.password or parts.query or parts.fragment
+    ):
+        raise ValueError(f"local advisor URL must be plain http on loopback, got {raw!r}")
+    return raw.rstrip("/")
+
+
+def llama_cpp_url() -> str:
+    """Base URL of llama-server. ``LLAMA_CPP_URL`` wins; otherwise ``http://127.0.0.1:<TRIAD_PORT_LLAMA_SERVER>``."""
+    raw = os.environ.get("LLAMA_CPP_URL", "").strip()
+    if not raw:
+        raw = f"http://127.0.0.1:{_safe_int_env('TRIAD_PORT_LLAMA_SERVER', 8080)}"
+    return validate_loopback_url(raw)
+
+
+def llama_n_ctx() -> Optional[int]:
+    """Read ``n_ctx`` from llama-server ``/props`` once per process. None if the server cannot be read."""
+    global _N_CTX_CACHE, _N_CTX_TRIED
+    if _N_CTX_TRIED:
+        return _N_CTX_CACHE
+    _N_CTX_TRIED = True
+    try:
+        import json
+        import urllib.request
+
+        url = llama_cpp_url().rstrip("/") + "/props"
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        n_ctx = None
+        if isinstance(data, dict):
+            n_ctx = data.get("n_ctx")
+            settings = data.get("default_generation_settings")
+            if n_ctx is None and isinstance(settings, dict):
+                n_ctx = settings.get("n_ctx")
+        if n_ctx is not None:
+            _N_CTX_CACHE = int(n_ctx)
+    except Exception:
+        _N_CTX_CACHE = None
+    return _N_CTX_CACHE
+
+
+def exceeds_context_budget(prompt: str, max_tokens: int = 1024, fraction: float = 0.9) -> Optional[str]:
+    """Reason string when prompt plus completion would exceed ``fraction`` of ``n_ctx``.
+
+    Token estimate is characters divided by 3.5. Returns None when the server context
+    is unknown or the prompt fits.
+    """
+    n_ctx = llama_n_ctx()
+    if not n_ctx or n_ctx <= 0:
+        return None
+    estimated = len(prompt or "") / 3.5
+    if estimated + max_tokens > fraction * n_ctx:
+        return (
+            f"context budget exceeded: ~{int(estimated)} prompt tokens + {max_tokens} completion "
+            f"exceeds {int(fraction * 100)}% of n_ctx {n_ctx}"
+        )
+    return None
+
+
 # --- Agent Mesh MCP -----------------------------------------------------------
 AGENT_MESH_DIR: Path = resolve_file_path("TRIAD_AGENT_MESH_DIR", HOME / "projects" / "agent-mesh-mcp")
 AGENT_MESH_SERVER: Path = resolve_file_path("TRIAD_AGENT_MESH_SERVER", AGENT_MESH_DIR / "dist" / "server.js")
@@ -139,4 +213,5 @@ __all__ = [
     "CODEX_AUTH", "MEM0_SCRIPT", "ANDROID_RELAY_ENV",
     "AGENT_MESH_DIR", "AGENT_MESH_SERVER",
     "PORT_HERMES_RELAY", "PORT_PIECES_PROXY", "PORT_TRIAD_SERVER", "PORT_PIECES_OS", "PORT_LLAMA_SERVER", "PORT_OLLAMA",
+    "LOOPBACK_HOSTS", "validate_loopback_url", "llama_cpp_url", "llama_n_ctx", "exceeds_context_budget",
 ]

@@ -420,33 +420,51 @@ class TestCodexAuthDecode(unittest.TestCase):
 
     def test_rank_advisors_for_task(self):
         sample_advisors = [
-            {"name": "claude", "priority": 10},
-            {"name": "codex", "priority": 20},
-            {"name": "antigravity", "priority": 30},
-            {"name": "nous", "priority": "40"},  # test string priority coercion
-            {"name": "ollama", "priority": None},  # test None priority fallback to 99
-            {"name": "custom_agent", "priority": 15},  # unknown name
+            {"name": "claude", "priority": 1, "strengths": {
+                "architecture": 0.95, "coding": 0.95, "reasoning": 0.85,
+                "scraping": 0.20, "browsing": 0.20, "micro": 0.15, "judge": 0.95,
+            }},
+            {"name": "codex", "priority": 2, "strengths": {
+                "architecture": 0.85, "coding": 0.90, "reasoning": 0.95,
+                "scraping": 0.20, "browsing": 0.20, "micro": 0.15, "judge": 0.85,
+            }},
+            {"name": "antigravity", "priority": 3, "strengths": {
+                "architecture": 0.80, "coding": 0.75, "reasoning": 0.75,
+                "scraping": 0.50, "browsing": 0.50, "micro": 0.30, "judge": 0.70,
+            }},
+            {"name": "nous", "priority": 4, "strengths": {
+                "architecture": 0.50, "coding": 0.50, "reasoning": 0.45,
+                "scraping": 0.80, "browsing": 0.80, "micro": 0.80, "judge": 0.55,
+            }},
+            {"name": "ollama", "priority": 5, "strengths": {
+                "architecture": 0.10, "coding": 0.15, "reasoning": 0.10,
+                "scraping": 0.95, "browsing": 0.95, "micro": 0.95, "judge": 0,
+            }},
+            {"name": "custom_agent", "priority": 15},  # missing map -> 0.5
         ]
 
-        # Scraping: zero-token local / free-tier models must be ranked first
         scraping_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "scraping")]
         self.assertEqual(scraping_ranked[:3], ["ollama", "nous", "antigravity"])
 
-        # Architecture: deep frontier reasoning advisors must be ranked first (claude, antigravity, codex)
         arch_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "architecture")]
-        self.assertEqual(arch_ranked[:3], ["claude", "antigravity", "codex"])
+        self.assertEqual(arch_ranked[:3], ["claude", "codex", "antigravity"])
 
-        # Reasoning: codex ranked highest for algorithmic/proof tasks, followed by claude & antigravity
         reasoning_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "reasoning")]
         self.assertEqual(reasoning_ranked[:3], ["codex", "claude", "antigravity"])
 
-        # Browsing: local and lightweight fast models prioritized
         browsing_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "browsing")]
         self.assertEqual(browsing_ranked[:3], ["ollama", "nous", "antigravity"])
 
-        # General or None task: strictly preserves configured priority order with custom agent in position
+        coding_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "coding")]
+        self.assertEqual(coding_ranked[:3], ["claude", "codex", "antigravity"])
+
+        # judge 0 excludes ollama
+        judge_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "judge")]
+        self.assertNotIn("ollama", judge_ranked)
+        self.assertEqual(judge_ranked[0], "claude")
+
         general_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, "general")]
-        self.assertEqual(general_ranked, ["claude", "custom_agent", "codex", "antigravity", "nous", "ollama"])
+        self.assertEqual(general_ranked, ["claude", "codex", "antigravity", "nous", "ollama", "custom_agent"])
 
         none_task_ranked = [a["name"] for a in rank_advisors_for_task(sample_advisors, None)]
         self.assertEqual(none_task_ranked, general_ranked)
@@ -477,6 +495,120 @@ class TestCodexAuthDecode(unittest.TestCase):
         res = _execute_single_advisor_raw(fake_advisor, "review diff", diff=huge_diff, mode="review_diff")
         if os.name == "nt":
             self.assertIn("exceeds windows argv limit", res.lower())
+
+    def test_execute_advisor_prompt_file_keeps_diff_off_argv(self):
+        from triad.advisor_manager import _execute_single_advisor_raw
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["stdin"] = kwargs.get("stdin")
+            prompt_path = None
+            for arg in cmd:
+                if isinstance(arg, str) and arg.endswith(".txt") and "triad_prompt_" in arg:
+                    prompt_path = arg
+                    break
+            captured["prompt_path"] = prompt_path
+            if prompt_path and os.path.exists(prompt_path):
+                with open(prompt_path, encoding="utf-8") as fh:
+                    captured["file_body"] = fh.read()
+
+            class FakeProc:
+                returncode = 0
+
+                def communicate(self, input=None, timeout=None):
+                    captured["stdin_input"] = input
+                    return ("VERDICT: APPROVED\n", "")
+
+                @property
+                def pid(self):
+                    return 0
+
+            return FakeProc()
+
+        fake_advisor = {
+            "name": "file_tool",
+            "binary_path": sys.executable,
+            "input_mode": "file",
+            "output_mode": "stdout",
+            "execution_flags": ["--prompt-file", "{prompt_file}"],
+        }
+        huge_diff = "diff --git a/foo.py b/foo.py\n" + ("+line of code UNIQUE_DIFF_BODY\n" * 3000)
+        with patch("triad.advisor_manager.subprocess.Popen", side_effect=fake_popen):
+            with patch("triad.advisor_manager.kill_process_tree"):
+                res = _execute_single_advisor_raw(
+                    fake_advisor, "review diff", diff=huge_diff, mode="review_diff"
+                )
+        self.assertIn("VERDICT: APPROVED", res)
+        joined = " ".join(str(a) for a in captured.get("cmd", []))
+        self.assertIn("--prompt-file", joined)
+        self.assertNotIn("UNIQUE_DIFF_BODY", joined)
+        self.assertIsNotNone(captured.get("prompt_path"))
+        self.assertIn("UNIQUE_DIFF_BODY", captured.get("file_body", ""))
+        self.assertIsNone(captured.get("stdin_input"))
+        self.assertFalse(os.path.exists(captured["prompt_path"]))
+
+    def test_execute_advisor_unknown_input_mode_does_not_spawn(self):
+        from triad.advisor_manager import _execute_single_advisor_raw
+        fake_advisor = {
+            "name": "bad_mode",
+            "binary_path": sys.executable,
+            "input_mode": "telepathy",
+            "execution_flags": [],
+        }
+        with patch("triad.advisor_manager.subprocess.Popen") as popen:
+            res = _execute_single_advisor_raw(fake_advisor, "hello")
+        self.assertIn("unrecognized input_mode", res.lower())
+        popen.assert_not_called()
+
+    def test_grok_argv_and_xai_key_stripped(self):
+        from triad.advisor_manager import _execute_single_advisor_raw, get_active_advisor
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["env"] = dict(kwargs.get("env") or {})
+
+            class FakeProc:
+                returncode = 0
+
+                def communicate(self, input=None, timeout=None):
+                    return ("VERDICT: APPROVED\n", "")
+
+                @property
+                def pid(self):
+                    return 0
+
+            return FakeProc()
+
+        grok = dict(get_active_advisor("grok") or {})
+        self.assertTrue(grok, "grok advisor must be configured")
+        grok["binary_path"] = sys.executable
+        grok["fallback_binary"] = None
+        with patch.dict(os.environ, {"XAI_API_KEY": "should-not-leak", "TRIAD_GROK": "1"}, clear=False):
+            with patch("triad.advisor_manager.subprocess.Popen", side_effect=fake_popen):
+                with patch("triad.advisor_manager.kill_process_tree"):
+                    with patch("triad.advisor_manager.resolve_binary", return_value=sys.executable):
+                        res = _execute_single_advisor_raw(grok, "say approved", mode="general")
+        self.assertIn("VERDICT: APPROVED", res)
+        joined = " ".join(str(a) for a in captured["cmd"])
+        self.assertIn("--prompt-file", joined)
+        self.assertIn("--permission-mode", joined)
+        self.assertIn("plan", joined)
+        self.assertIn("--max-turns", joined)
+        self.assertIn("1", joined)
+        self.assertIn("--no-subagents", joined)
+        self.assertIn("--disable-web-search", joined)
+        self.assertNotIn(" -p ", f" {joined} ")
+        self.assertNotIn("XAI_API_KEY", captured["env"])
+
+    def test_grok_kill_switch_skips_spawn(self):
+        from triad.advisor_manager import query_configured_advisor
+        with patch.dict(os.environ, {"TRIAD_GROK": "0"}, clear=False):
+            with patch("triad.advisor_manager.subprocess.Popen") as popen:
+                res = query_configured_advisor("grok", "hello")
+        self.assertIn("dispatch disabled", res.lower())
+        popen.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -12,14 +12,13 @@ import sys
 import time
 import argparse
 import urllib.request
-from pathlib import Path
 
 try:
     from triad.agent.runtime import AgentRuntime
-    from triad.agent.router import ZeroCostRouter, LOCAL_LLAMA_URL
+    from triad.agent.router import LOCAL_LLAMA_URL
 except ImportError:
     from agent.runtime import AgentRuntime
-    from agent.router import ZeroCostRouter, LOCAL_LLAMA_URL
+    from agent.router import LOCAL_LLAMA_URL
 
 
 def read_piped_stdin() -> str:
@@ -73,7 +72,7 @@ def print_status(runtime: AgentRuntime):
     local_health = "OFFLINE"
     try:
         req = urllib.request.Request(f"{LOCAL_LLAMA_URL.rstrip('/')}/health", headers={"User-Agent": "triad-agent"})
-        with urllib.request.urlopen(req, timeout=1.5) as r:
+        with urllib.request.urlopen(req, timeout=1.5) as r:  # nosec B310
             if r.status == 200:
                 local_health = "ONLINE / HEALTHY (Port 8080)"
     except Exception:

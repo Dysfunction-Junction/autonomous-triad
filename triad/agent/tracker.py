@@ -9,7 +9,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 DEFAULT_LEDGER_PATH = Path.home() / ".triad" / "usage_ledger.json"
 FIVE_HOURS_SECONDS = 18000  # 5 hours * 3600s

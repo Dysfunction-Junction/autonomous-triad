@@ -809,7 +809,6 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
         envelope_id = body.get("id", "")
         sender = body.get("from", "")
         action = body.get("action", "")
-        capability = body.get("capability", "")
         payload = body.get("payload") or {}
 
         if action == "ping":
@@ -1375,6 +1374,8 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
 
 def start_server(host: str = "127.0.0.1", port: int = 8789) -> None:
     """Start Triad Ambient HTTP server listening until interrupted."""
+    if not SERVER_TOKEN and os.environ.get("TRIAD_INSECURE_DEV") != "1":
+        raise SystemExit("TRIAD_SERVER_TOKEN is required; TRIAD_INSECURE_DEV=1 permits explicit insecure development only")
     server_address = (host, port)
     try:
         httpd = ThreadingHTTPServer(server_address, TriadRequestHandler)

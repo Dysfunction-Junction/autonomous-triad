@@ -56,32 +56,21 @@ ADVISOR_CALLS_LOG = LOGS_DIR / "advisor_calls.jsonl"
 LIMIT_MARKERS = ("session limit", "rate limit", "usage limit")
 TEST_ROLES = frozenset({"test", "mock"})
 
-# Task-specific prioritized advisor ordering for token efficiency & quality alignment across all onboard clients
-TASK_ADVISOR_PRIORITY: Dict[str, List[str]] = {
-    # Structural design, invariants, database schemas, security -> Claude 3.7 & Antigravity (2M context) lead
-    "architecture": ["claude", "antigravity", "codex", "nous", "ollama"],
-    # Deep algorithmic reasoning, complex state machines, difficult logic -> Codex (gpt-6-astra) leads
-    "reasoning": ["codex", "claude", "antigravity", "nous", "ollama"],
-    # High-volume scraping, HTML/DOM parsing, text extraction -> Ollama (local) & Nous Flash lead ($0 cost)
-    "scraping": ["ollama", "nous", "antigravity", "codex", "claude"],
-    # Filesystem & path browsing, directory exploration -> Ollama (local) & Nous Flash lead
-    "browsing": ["ollama", "nous", "antigravity", "codex", "claude"],
-    # Code review & verification -> Claude first, then Codex, then Antigravity
-    "coding": ["claude", "codex", "antigravity", "nous", "ollama"],
-    # Micro-tasks (commit messages, docstrings, formatting) -> Ollama local first, then Nous Flash
-    "micro": ["ollama", "nous", "antigravity", "claude", "codex"],
-    # General queries -> default configuration order
-    "general": ["claude", "codex", "antigravity", "nous", "ollama"],
-}
+_STRENGTH_WARNED: set = set()
+
+
+def dispatch_allowed(advisor: Dict[str, Any]) -> bool:
+    """Env kill switches. Grok is skipped when TRIAD_GROK is 0/false/no/off."""
+    name = str(advisor.get("name") or "").lower()
+    if name == "grok":
+        raw = os.environ.get("TRIAD_GROK", "").strip().lower()
+        if raw in ("0", "false", "no", "off"):
+            return False
+    return True
 
 
 def rank_advisors_for_task(advisors: List[Dict[str, Any]], task: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Ranks candidate advisors dynamically based on task profile and token efficiency.
-    Ensures high-token scraping/browsing tasks default to $0 local/flash tiers,
-    while architectural and deep reasoning tasks default to high-capacity reasoning models.
-    Preserves config priority order for general or unclassified tasks.
-    """
+    """Rank by lane strengths. Missing map = 0.5 then priority. Strength 0 is excluded."""
     def _safe_priority(adv: Dict[str, Any]) -> int:
         try:
             val = adv.get("priority")
@@ -89,19 +78,35 @@ def rank_advisors_for_task(advisors: List[Dict[str, Any]], task: Optional[str] =
         except (ValueError, TypeError):
             return 99
 
-    norm_task = (task or "").strip().lower()
-    if not norm_task or norm_task in ("general", "auto") or norm_task not in TASK_ADVISOR_PRIORITY:
-        return sorted(advisors, key=_safe_priority)
+    norm = (task or "").strip().lower()
+    use_lane = bool(norm) and norm not in ("general", "auto")
 
-    preferred_order = TASK_ADVISOR_PRIORITY[norm_task]
-    order_map = {name: idx for idx, name in enumerate(preferred_order)}
+    def strength(adv: Dict[str, Any]) -> float:
+        raw = adv.get("strengths")
+        if not isinstance(raw, dict):
+            return 0.5
+        if norm not in raw:
+            return 0.5
+        try:
+            return float(raw[norm])
+        except (TypeError, ValueError):
+            name = str(adv.get("name") or "")
+            if name and name not in _STRENGTH_WARNED:
+                print(f"[Triad] non-numeric strength for {name}.{norm}; excluding", file=sys.stderr)
+                _STRENGTH_WARNED.add(name)
+            return 0.0
 
-    def sort_key(adv: Dict[str, Any]) -> Tuple[int, int]:
-        name = str(adv.get("name") or "").lower()
-        task_rank = order_map.get(name, 90)
-        return (task_rank, _safe_priority(adv))
-
-    return sorted(advisors, key=sort_key)
+    scored = []
+    for adv in advisors:
+        if not use_lane:
+            scored.append((0.0, _safe_priority(adv), adv))
+            continue
+        score = strength(adv)
+        if score <= 0:
+            continue
+        scored.append((-score, _safe_priority(adv), adv))
+    scored.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in scored]
 
 
 def test_advisors_allowed() -> bool:
@@ -204,8 +209,15 @@ def record_advisor_call(advisor_name: str, mode: str, elapsed_seconds: float, st
 
 def build_advisor_prompt(prompt: str, context: Optional[str] = None, diff: Optional[str] = None, mode: str = "general") -> str:
     """Construct structured advisor prompt based on query mode."""
+    try:
+        from triad.egress import sanitize_egress
+    except ImportError:
+        from egress import sanitize_egress
+    prompt = sanitize_egress(prompt or "")
+    if context:
+        context = sanitize_egress(context)
     if diff:
-        diff = strip_diff_bloat(diff)
+        diff = strip_diff_bloat(sanitize_egress(diff))
 
     system_preamble = (
         "You are the Lead Architect and Code Reviewer acting as the autonomous advisory council to Antigravity (the primary coding agent).\n"
@@ -474,12 +486,16 @@ def _execute_single_advisor_raw(
 
     full_prompt = build_advisor_prompt(prompt, context=context, diff=diff, mode=mode)
     flags = list(advisor.get("execution_flags", []))
-    input_mode = advisor.get("input_mode", "stdin")
+    input_mode = str(advisor.get("input_mode", "stdin") or "stdin").strip().lower()
     output_mode = advisor.get("output_mode", "stdout")
     advisor_name = advisor.get("name", "unknown")
     display_name = advisor.get("display_name", advisor_name)
 
+    if input_mode not in ("stdin", "arg", "file"):
+        return f"[Error: unrecognized input_mode '{input_mode}']"
+
     temp_out_path = None
+    temp_prompt_path = None
     if output_mode == "file":
         temp_fd, temp_out_path = tempfile.mkstemp(suffix=".txt")
         os.close(temp_fd)
@@ -492,33 +508,60 @@ def _execute_single_advisor_raw(
     # Guard against Windows CreateProcess 32k argv limit and cmd.exe script injection hazards
     prompt_arg = full_prompt
     resolved_bin = shutil.which(bin_path) or bin_path
-    if input_mode == "arg" and os.name == "nt":
+
+    if input_mode == "file":
+        prompt_fd, temp_prompt_path = tempfile.mkstemp(suffix=".txt", prefix="triad_prompt_")
+        try:
+            os.write(prompt_fd, full_prompt.encode("utf-8"))
+        finally:
+            os.close(prompt_fd)
+        try:
+            os.chmod(temp_prompt_path, 0o600)
+        except OSError:
+            pass
+
+    if input_mode in ("arg", "file") and os.name == "nt":
         is_batch = str(resolved_bin).lower().endswith((".cmd", ".bat"))
-        if is_batch:
+        if is_batch and input_mode == "arg":
             # Check for shell metacharacters that cause argument injection in cmd.exe (BatBadBut)
             cmd_meta = ('&', '|', '<', '>', '^', '%', '"', '\n', '\r')
             if any(c in prompt_arg for c in cmd_meta):
                 if temp_out_path and os.path.exists(temp_out_path):
                     os.unlink(temp_out_path)
+                if temp_prompt_path and os.path.exists(temp_prompt_path):
+                    os.unlink(temp_prompt_path)
                 return f"[Error: Advisor binary {bin_path} is a Windows batch script (.cmd/.bat). Passing prompts containing shell metacharacters via cmd.exe argv is unsafe; configure input_mode: stdin or use a native .exe binary]"
             cmd_limit = 7500
         else:
             cmd_limit = 30000
 
         preview_out = temp_out_path or str(Path.home() / "AppData" / "Local" / "Temp" / "triad_preview_out.txt")
-        cmd_preview = [resolved_bin] + [f.replace("{output_file}", preview_out).replace("{prompt}", prompt_arg) for f in base_flags]
+        preview_prompt = temp_prompt_path or str(Path.home() / "AppData" / "Local" / "Temp" / "triad_preview_prompt.txt")
+        preview_flags = []
+        for f in base_flags:
+            f = f.replace("{output_file}", preview_out)
+            if input_mode == "arg":
+                f = f.replace("{prompt}", prompt_arg)
+            elif input_mode == "file":
+                f = f.replace("{prompt_file}", preview_prompt).replace(
+                    "{prompt_dir}", str(Path(preview_prompt).parent)
+                )
+            preview_flags.append(f)
+        cmd_preview = [resolved_bin] + preview_flags
         try:
             expanded_len = len(subprocess.list2cmdline(cmd_preview))
         except Exception:
-            expanded_len = len(prompt_arg) + 2000
+            expanded_len = (len(prompt_arg) if input_mode == "arg" else len(preview_prompt)) + 2000
 
         if expanded_len > cmd_limit:
-            if mode in ("review_diff", "gate") or diff:
+            if mode in ("review_diff", "gate") or diff or input_mode == "file":
                 if temp_out_path and os.path.exists(temp_out_path):
                     os.unlink(temp_out_path)
+                if temp_prompt_path and os.path.exists(temp_prompt_path):
+                    os.unlink(temp_prompt_path)
                 return f"[Error: command line ({expanded_len} chars) exceeds Windows argv limit ({cmd_limit}); advisor cannot review full diff safely]"
 
-            # Shrink iteratively until expanded length fits safely
+            # Shrink iteratively until expanded length fits safely (arg mode only)
             mark = (" ... [Context truncated for CLI length limits] ... " if is_batch
                     else "\n\n... [Context truncated for CLI command-line length limits] ...\n\n")
             overshoot = expanded_len - cmd_limit
@@ -542,6 +585,8 @@ def _execute_single_advisor_raw(
             if not fitted:
                 if temp_out_path and os.path.exists(temp_out_path):
                     os.unlink(temp_out_path)
+                if temp_prompt_path and os.path.exists(temp_prompt_path):
+                    os.unlink(temp_prompt_path)
                 return f"[Error: Prompt and flags ({expanded_len} chars) exceed Windows argv limit ({cmd_limit}) even after context truncation]"
 
     # Parameter interpolation for flags
@@ -551,6 +596,10 @@ def _execute_single_advisor_raw(
             flag = flag.replace("{output_file}", temp_out_path)
         if input_mode == "arg":
             flag = flag.replace("{prompt}", prompt_arg)
+        elif input_mode == "file" and temp_prompt_path:
+            flag = flag.replace("{prompt_file}", temp_prompt_path).replace(
+                "{prompt_dir}", str(Path(temp_prompt_path).parent)
+            )
         resolved_flags.append(flag)
 
     cmd = [resolved_bin] + resolved_flags
@@ -563,6 +612,10 @@ def _execute_single_advisor_raw(
         env.pop("TRIAD_TASK", None)
     for k, v in advisor.get("env", {}).items():
         env[k] = expand_env_value(str(k), str(v))
+    if str(advisor.get("name") or "").lower() == "grok":
+        allow = os.environ.get("TRIAD_GROK_ALLOW_API_KEY", "").strip().lower()
+        if allow not in ("1", "true", "yes", "on"):
+            env.pop("XAI_API_KEY", None)
 
     started = time.monotonic()
     proc = None
@@ -657,6 +710,11 @@ def _execute_single_advisor_raw(
         if temp_out_path and os.path.exists(temp_out_path):
             try:
                 os.remove(temp_out_path)
+            except Exception:
+                pass
+        if temp_prompt_path and os.path.exists(temp_prompt_path):
+            try:
+                os.remove(temp_prompt_path)
             except Exception:
                 pass
 
@@ -874,6 +932,10 @@ def query_configured_advisor(
         skipped = []
         for adv in advisors:
             name = str(adv.get("name") or "unknown")
+            if not dispatch_allowed(adv):
+                skipped.append(f"{name}: dispatch disabled")
+                print(f"[Triad] Skipping {name} (dispatch disabled)", file=sys.stderr)
+                continue
             if is_circuit_open(name):
                 rem = int(circuit_remaining(name))
                 reason = circuit_reason(name) or "cooldown"
@@ -885,7 +947,11 @@ def query_configured_advisor(
                 skipped.append(f"{name}: {why}")
                 print(f"[Triad Ready] Skipping {name} ({why})", file=sys.stderr)
                 continue
-            adv_timeout = int(adv.get("timeout") or timeout)
+            raw_adv_timeout = adv.get("timeout")
+            if raw_adv_timeout is None or raw_adv_timeout == "":
+                adv_timeout = int(timeout)
+            else:
+                adv_timeout = min(int(raw_adv_timeout), int(timeout))
             res = _execute_single_advisor(adv, prompt, context=context, diff=diff, mode=mode, timeout=adv_timeout, track_circuit=track_circuit, task=task)
             if not is_failed_advisor_response(res):
                 if fail_notes or skipped:
@@ -921,8 +987,15 @@ def query_configured_advisor(
     advisor = get_active_advisor(advisor_name, config_path=config_path)
     if not advisor:
         return f"[Error: Advisor '{advisor_name}' not found in configuration]"
+    if not dispatch_allowed(advisor):
+        return f"[Error: {advisor_name} dispatch disabled (TRIAD_GROK=0)]"
 
-    return _execute_single_advisor(advisor, prompt, context=context, diff=diff, mode=mode, timeout=timeout, track_circuit=track_circuit, task=task)
+    raw_adv_timeout = advisor.get("timeout")
+    if raw_adv_timeout is None or raw_adv_timeout == "":
+        named_timeout = int(timeout)
+    else:
+        named_timeout = min(int(raw_adv_timeout), int(timeout))
+    return _execute_single_advisor(advisor, prompt, context=context, diff=diff, mode=mode, timeout=named_timeout, track_circuit=track_circuit, task=task)
 
 
 if __name__ == "__main__":

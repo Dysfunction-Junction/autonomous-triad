@@ -12,8 +12,6 @@
         "--strict-mcp-config",
         "--mcp-config",
         "{empty_mcp}",
-        "--setting-sources",
-        "",
         "--system-prompt",
         "You are a rigorous senior engineering advisor. Follow the instructions in the user message exactly.",
         "--disable-slash-commands"
@@ -23,7 +21,18 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.95,
+        "coding": 0.95,
+        "reasoning": 0.85,
+        "judge": 0.95,
+        "red_team": 0.8,
+        "long_context": 0.6,
+        "scraping": 0.2,
+        "browsing": 0.2,
+        "micro": 0.15
+      }
     },
     {
       "name": "codex",
@@ -81,7 +90,18 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.85,
+        "coding": 0.9,
+        "reasoning": 0.95,
+        "judge": 0.85,
+        "red_team": 0.95,
+        "long_context": 0.55,
+        "scraping": 0.2,
+        "browsing": 0.2,
+        "micro": 0.15
+      }
     },
     {
       "name": "antigravity",
@@ -103,7 +123,18 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.8,
+        "coding": 0.75,
+        "reasoning": 0.75,
+        "judge": 0.7,
+        "red_team": 0.7,
+        "long_context": 1.0,
+        "scraping": 0.5,
+        "browsing": 0.5,
+        "micro": 0.3
+      }
     },
     {
       "name": "nous",
@@ -119,7 +150,18 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.5,
+        "coding": 0.5,
+        "reasoning": 0.45,
+        "judge": 0.55,
+        "red_team": 0.5,
+        "long_context": 0.3,
+        "scraping": 0.8,
+        "browsing": 0.8,
+        "micro": 0.8
+      }
     },
     {
       "name": "ollama",
@@ -138,7 +180,18 @@
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
-      "enabled": true
+      "enabled": true,
+      "strengths": {
+        "architecture": 0.1,
+        "coding": 0.15,
+        "reasoning": 0.1,
+        "judge": 0,
+        "red_team": 0,
+        "long_context": 0,
+        "scraping": 0.95,
+        "browsing": 0.95,
+        "micro": 0.95
+      }
     },
     {
       "name": "oz",
@@ -150,6 +203,54 @@
       "dispatch_status": "pending_headless_transport",
       "registration_note": "Council member for interactive architecture and review. Automatic subprocess dispatch is disabled: installed warp.cmd is TUI-only and no oz CLI is on PATH. Do not enable until a bounded noninteractive transport and $0 incremental-cost route are verified.",
       "budget_policy": "Same owner token restrictions as other agents; targeted context, sanitized diffs, MCP stripping, existing cooldowns and shared two-live-advisor session cap. No metered fallback without owner approval."
+    },
+    {
+      "name": "grok",
+      "display_name": "Grok (xAI subscription CLI)",
+      "role": "production",
+      "binary_path": "{home}/.grok/bin/grok.exe",
+      "fallback_binary": "grok",
+      "priority": 7,
+      "execution_flags": [
+        "--prompt-file",
+        "{prompt_file}",
+        "--output-format",
+        "plain",
+        "--permission-mode",
+        "plan",
+        "--max-turns",
+        "1",
+        "--no-subagents",
+        "--disable-web-search",
+        "--no-wait-for-background",
+        "--no-auto-update",
+        "--cwd",
+        "{prompt_dir}",
+        "--rules",
+        "Advisory seat only. Do not call tools. Do not modify files, run commands, spawn agents, or use the network. Answer from the prompt alone.",
+        "--disallowed-tools",
+        "read_file,hashline_read,grep,hashline_grep,list_dir,write,search_replace,hashline_edit,StrReplace,EditNotebook,Delete,run_terminal_cmd,run_terminal_command,web_search,web_fetch,task,spawn_subagent,Agent,get_task_output,get_command_or_subagent_output,wait_tasks,wait_commands_or_subagents,kill_task,kill_command_or_subagent,todo_write,image_gen,image_edit,GenerateImage,GenerateVideo,CreateGoal,UpdateGoal,XSearch,CallMcpTool,GetMcpTools,FetchMcpResource,ListMcpResources,AskQuestion,ReadLints,Await,Shell,monitor,lsp,Execute,workflow"
+      ],
+      "input_mode": "file",
+      "output_mode": "stdout",
+      "timeout": 180,
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "strengths": {
+        "architecture": 0.82,
+        "coding": 0.84,
+        "reasoning": 0.8,
+        "judge": 0.92,
+        "red_team": 0.92,
+        "long_context": 0.9,
+        "micro": 0,
+        "scraping": 0,
+        "browsing": 0
+      },
+      "enabled": true,
+      "dispatch_status": "headless_ready",
+      "budget_policy": "Subscription CLI only. Same token restrictions as other agents: sanitized diffs, MCP and write and shell denied, existing cooldowns, two-live-advisor cap. No metered xAI fallback unless TRIAD_GROK_ALLOW_API_KEY is set by the owner."
     },
     {
       "name": "mock",
