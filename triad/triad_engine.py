@@ -5926,9 +5926,9 @@ def cmd_sync(args):
     Ensures zero drift between repository development and the live user execution environment.
     """
     try:
-        from triad.sync_manager import run_full_sync
+        from triad.sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
     except ImportError:
-        from sync_manager import run_full_sync
+        from sync_manager import run_full_sync, sync_engine, sync_launchers, sync_skills, sync_hooks, DEFAULT_REPOS
 
     apply_flag = getattr(args, "apply", False)
     dry_run = getattr(args, "dry_run", False) or not apply_flag
@@ -6005,7 +6005,7 @@ def cmd_sync(args):
 
     # Hooks
     if report.get("hooks"):
-        print("[4] Active Repository Pre-Commit Hooks:")
+        print(f"[4] Active Repository Pre-Commit Hooks:")
         for h in report["hooks"]:
             status_tag = f"[{h['hook_status'].upper()}]"
             action_note = f" -> {h['action_taken']}" if h.get("action_taken") != "none" else ""
@@ -6040,6 +6040,72 @@ def cmd_sync(args):
     else:
         print("TRIAD SYNC COMPLETE: Zero drift maintained across development and runtime.")
         print("================================================================================\n")
+
+
+def cmd_rewrite(args):
+    """Expand a sparse prompt into a fully-specified agent brief (local, zero-cost by default)."""
+    try:
+        from triad.prompt_rewriter import format_output, polish_with_llm, rewrite_prompt
+    except ImportError:
+        from prompt_rewriter import format_output, polish_with_llm, rewrite_prompt  # type: ignore
+
+    prompt = getattr(args, "prompt", "") or ""
+    if isinstance(prompt, list):
+        prompt = " ".join(prompt).strip()
+    if not prompt and not sys.stdin.isatty():
+        prompt = sys.stdin.read().strip()
+    if not prompt:
+        print("Usage: triad rewrite <prompt> | echo prompt | triad rewrite", file=sys.stderr)
+        sys.exit(2)
+
+    context = getattr(args, "context", "") or ""
+    context_file = getattr(args, "context_file", "") or ""
+    if context_file and os.path.exists(context_file):
+        with open(context_file, "r", encoding="utf-8", errors="replace") as f:
+            context = f.read()
+
+    diff_content = ""
+    diff_file = getattr(args, "diff_file", "") or ""
+    if diff_file:
+        if diff_file == "-":
+            # prompt already consumed stdin unless it came from argv
+            if getattr(args, "prompt", None):
+                diff_content = sys.stdin.read() if not sys.stdin.isatty() else ""
+        elif os.path.exists(diff_file):
+            with open(diff_file, "r", encoding="utf-8", errors="replace") as f:
+                diff_content = f.read()
+
+    extra = getattr(args, "constraint", None) or []
+    style = getattr(args, "style", "brief") or "brief"
+    brief = rewrite_prompt(
+        prompt,
+        context=context or None,
+        diff=diff_content or None,
+        cwd=os.getcwd(),
+        extra_constraints=extra,
+        style=style,
+    )
+
+    if getattr(args, "llm", False):
+        try:
+            polished = polish_with_llm(brief, engine=getattr(args, "engine", "auto") or "auto")
+            brief.rewritten = polished
+            brief.metadata["llm_polished"] = True
+        except Exception as exc:
+            print(f"[triad rewrite] LLM polish failed ({exc}); emitting local brief.", file=sys.stderr)
+
+    out_path = getattr(args, "output", "") or ""
+    text = format_output(
+        brief,
+        as_json=getattr(args, "json", False),
+        include_meta=not getattr(args, "plain", False),
+    )
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(text if text.endswith("\n") else text + "\n")
+        print(f"[triad rewrite] wrote {out_path}")
+    else:
+        print(text)
 
 
 def cmd_agent(args):
@@ -6207,6 +6273,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--apply", action="store_true", help="Execute synchronization (overrides dry-run default from natural language)")
     p_sync.add_argument("--json", action="store_true", help="Output synchronization audit in structured JSON format")
 
+    # rewrite / prompt
+    p_rw = subparsers.add_parser(
+        "rewrite",
+        aliases=["prompt", "brief"],
+        help="Expand a sparse prompt into a detailed agent brief (local/zero-cost; optional --llm polish)",
+    )
+    p_rw.add_argument("prompt", nargs="*", default=[], help="Raw prompt to expand (or pass via stdin)")
+    p_rw.add_argument("--context", default="", help="Inline extra context")
+    p_rw.add_argument("--context-file", default="", help="Path to context file")
+    p_rw.add_argument("--diff-file", default="", help="Optional diff path (or - for stdin when prompt is on argv)")
+    p_rw.add_argument("--constraint", action="append", default=[], help="Extra hard constraint (repeatable)")
+    p_rw.add_argument(
+        "--style",
+        choices=["brief", "markdown", "compact"],
+        default="brief",
+        help="Output style (default: brief markdown)",
+    )
+    p_rw.add_argument("--json", action="store_true", help="Emit structured JSON instead of markdown")
+    p_rw.add_argument("--plain", action="store_true", help="Omit the meta banner; print only the brief")
+    p_rw.add_argument("-o", "--output", default="", help="Write result to a file instead of stdout")
+    p_rw.add_argument("--llm", action="store_true", help="Optional paid polish pass via advisory council")
+    p_rw.add_argument("--engine", default="auto", help="Engine for --llm polish (default auto)")
+
     # agent
     p_agent = subparsers.add_parser("agent", help="Launch interactive or single-shot autonomous zero-cost agent")
     p_agent.add_argument("-p", "--print", "--prompt", dest="prompt", type=str, default="", help="Run a single prompt non-interactively")
@@ -6225,7 +6314,7 @@ def main():
         "doctor", "review", "consult", "debug", "gate",
         "bench", "worktree", "auto", "intent", "run",
         "listen", "serve", "hook", "mesh", "swarm", "sync",
-        "agent",
+        "agent", "rewrite", "prompt", "brief",
         "-h", "--help"
     }
     known_sync_components = {"engine", "launchers", "skills", "hooks", "all"}
@@ -6269,6 +6358,9 @@ def main():
         "swarm": cmd_mesh,
         "sync": cmd_sync,
         "agent": cmd_agent,
+        "rewrite": cmd_rewrite,
+        "prompt": cmd_rewrite,
+        "brief": cmd_rewrite,
     }
 
     handler = dispatch.get(args.command)
