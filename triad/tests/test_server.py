@@ -619,6 +619,78 @@ class TestTriadServer(unittest.TestCase):
             self.assertEqual(body.get("status"), "reject_unconfirmed")
             self.assertFalse(body.get("upstream_notified"))
 
+    def test_approval_contract_v2_and_payload_hash_enforcement(self):
+        # Exocortex forwardApprove probes this before hashed approve.
+        status, _, body = self._post("/mishmash/delegate", {
+            "v": 1,
+            "id": "contract-probe-0001",
+            "from": "pieces-android-companion-seamless",
+            "to": "autonomous-triad",
+            "capability": "intent",
+            "action": "approval_contract",
+            "payload": {},
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("ok"))
+        result = body.get("result") or {}
+        self.assertEqual(result.get("approvalVersion"), 2)
+        self.assertTrue(result.get("enforcesPayloadHash"))
+
+        # v2 approve without payload_hash must fail closed before upstream.
+        with patch("triad.server._OPENER.open") as mock_opener:
+            status, _, body = self._post("/mishmash/delegate", {
+                "v": 1,
+                "id": "approve-v2-missing-hash",
+                "from": "pieces-android-companion-seamless",
+                "to": "autonomous-triad",
+                "capability": "intent",
+                "action": "approve",
+                "payload": {
+                    "proposal_id": "prop_hash_1",
+                    "nonce": "nonce_hash_1",
+                    "require_payload_hash": True,
+                    "approval_version": 2,
+                },
+            })
+            self.assertEqual(status, 400)
+            self.assertFalse(body.get("ok"))
+            self.assertIn("payload_hash", body.get("error", ""))
+            mock_opener.assert_not_called()
+
+        # Valid hash is forwarded on release.
+        captured = {}
+
+        def fake_open(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps({"ok": True, "result": {"status": "released"}}).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+            return mock_resp
+
+        digest = "a" * 64
+        with patch("triad.server._OPENER.open", side_effect=fake_open):
+            status, _, body = self._post("/mishmash/delegate", {
+                "v": 1,
+                "id": "approve-v2-with-hash",
+                "from": "pieces-android-companion-seamless",
+                "to": "autonomous-triad",
+                "capability": "intent",
+                "action": "approve",
+                "payload": {
+                    "proposal_id": "prop_hash_2",
+                    "nonce": "nonce_hash_2",
+                    "payload_hash": digest,
+                    "require_payload_hash": True,
+                    "approval_version": 2,
+                },
+            })
+            self.assertEqual(status, 200)
+            self.assertTrue(body.get("ok"))
+            upstream_payload = captured["body"]["payload"]
+            self.assertEqual(upstream_payload.get("payloadHash"), digest)
+            self.assertTrue(upstream_payload.get("require_payload_hash"))
+            self.assertEqual(upstream_payload.get("approval_version"), 2)
+
     def test_evaluate_action_risk_unit(self):
         import types
         from triad.server import _evaluate_action_risk

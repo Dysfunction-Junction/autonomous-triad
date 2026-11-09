@@ -52,6 +52,8 @@ except ImportError:
 
 logger = logging.getLogger("triad.server")
 _ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,128}")
+_PAYLOAD_HASH_RE = re.compile(r"^[a-fA-F0-9]{64}$")
+APPROVAL_VERSION = 2
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -867,6 +869,22 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        if action == "approval_contract":
+            # Exocortex forwardApprove probes this before sending a hashed approve.
+            self._send_json(200, {
+                "v": 1,
+                "inReplyTo": envelope_id,
+                "from": "autonomous-triad",
+                "to": sender,
+                "ok": True,
+                "result": {
+                    "approvalVersion": APPROVAL_VERSION,
+                    "enforcesPayloadHash": True,
+                    "service": "autonomous-triad",
+                },
+            })
+            return
+
         if action == "approve":
             if SERVER_TOKEN and not self._is_authorized():
                 self._send_json(401, {
@@ -882,6 +900,14 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             nonce = str(payload.get("nonce") or payload.get("approval_nonce") or payload.get("approvalNonce") or "").strip()
             reason = str(payload.get("reason") or "Approved via Mobile 1-Tap Bridge").strip()
             attestation = payload.get("biometric_attestation")
+            payload_hash = str(payload.get("payload_hash") or payload.get("payloadHash") or "").strip()
+            require_hash = bool(payload.get("require_payload_hash") or payload.get("requirePayloadHash"))
+            try:
+                approval_version = int(payload.get("approval_version") or payload.get("approvalVersion") or 0)
+            except (TypeError, ValueError):
+                approval_version = 0
+            if approval_version >= 2:
+                require_hash = True
             if not proposal_id or not nonce:
                 self._send_json(400, {
                     "v": 1,
@@ -892,7 +918,21 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
                     "error": "proposal approval requires proposal_id and nonce",
                 })
                 return
-            status_code, resp_data = self._approve_proposal_flow(proposal_id, nonce, reason, attestation)
+            if require_hash and not _PAYLOAD_HASH_RE.fullmatch(payload_hash):
+                self._send_json(400, {
+                    "v": 1,
+                    "inReplyTo": envelope_id,
+                    "from": "autonomous-triad",
+                    "to": sender,
+                    "ok": False,
+                    "error": "v2 approval requires payload_hash (64-char sha256 hex)",
+                })
+                return
+            status_code, resp_data = self._approve_proposal_flow(
+                proposal_id, nonce, reason, attestation,
+                payload_hash=payload_hash or None,
+                require_payload_hash=require_hash,
+            )
             env_resp = {
                 "v": 1,
                 "inReplyTo": envelope_id,
@@ -991,12 +1031,24 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": f"Internal error: {e}"})
 
-    def _approve_proposal_flow(self, proposal_id: str, nonce: str, reason: str, biometric_attestation: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
+    def _approve_proposal_flow(
+        self,
+        proposal_id: str,
+        nonce: str,
+        reason: str,
+        biometric_attestation: Optional[str] = None,
+        payload_hash: Optional[str] = None,
+        require_payload_hash: bool = False,
+    ) -> Tuple[int, Dict[str, Any]]:
         """Validate format, execute upstream release via _registry_call, and construct standardized response."""
         if not _ID_RE.fullmatch(proposal_id):
             return 400, {"ok": False, "error": "Invalid proposal_id format (must be 1-128 chars alphanumeric/-/_)"}
         if not _ID_RE.fullmatch(nonce):
             return 400, {"ok": False, "error": "Invalid nonce format (must be 1-128 chars alphanumeric/-/_)"}
+        if require_payload_hash and not _PAYLOAD_HASH_RE.fullmatch(payload_hash or ""):
+            return 400, {"ok": False, "error": "v2 approval requires payload_hash (64-char sha256 hex)"}
+        if payload_hash and not _PAYLOAD_HASH_RE.fullmatch(payload_hash):
+            return 400, {"ok": False, "error": "Invalid payload_hash (must be 64-char sha256 hex)"}
         if biometric_attestation is not None:
             if not isinstance(biometric_attestation, str) or not biometric_attestation.strip():
                 return 400, {"ok": False, "error": "Invalid biometric_attestation (must be non-empty string <= 4096 UTF-8 bytes)"}
@@ -1011,12 +1063,19 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
 
         clean_reason = str(reason or "Approved via Mobile 1-Tap Bridge")[:500]
 
-        call_status, call_detail = _registry_call("release", {
+        release_payload: Dict[str, Any] = {
             "proposalId": proposal_id,
             "nonce": nonce,
             "reason": clean_reason,
             "biometric_attestation": biometric_attestation,
-        }, timeout=3.0)
+        }
+        if payload_hash:
+            release_payload["payloadHash"] = payload_hash.lower()
+            release_payload["payload_hash"] = payload_hash.lower()
+            release_payload["require_payload_hash"] = True
+            release_payload["approval_version"] = APPROVAL_VERSION
+
+        call_status, call_detail = _registry_call("release", release_payload, timeout=3.0)
 
         if call_status == "ok":
             return 200, {
