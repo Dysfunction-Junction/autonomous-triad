@@ -813,6 +813,19 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
         action = body.get("action", "")
         payload = body.get("payload") or {}
 
+        # When TRIAD_SERVER_TOKEN is configured, every delegated action needs the bearer
+        # (including ping/classify/approval_contract). Exocortex always sends it.
+        if SERVER_TOKEN and not self._is_authorized():
+            self._send_json(401, {
+                "v": 1,
+                "inReplyTo": envelope_id,
+                "from": "autonomous-triad",
+                "to": sender,
+                "ok": False,
+                "error": "Unauthorized: sensitive action requires valid TRIAD_SERVER_TOKEN",
+            })
+            return
+
         if action == "ping":
             self._send_json(200, {
                 "v": 1,

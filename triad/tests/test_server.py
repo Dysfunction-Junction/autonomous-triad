@@ -619,6 +619,32 @@ class TestTriadServer(unittest.TestCase):
             self.assertEqual(body.get("status"), "reject_unconfirmed")
             self.assertFalse(body.get("upstream_notified"))
 
+    def test_delegate_requires_bearer_when_token_configured(self):
+        with patch("triad.server.SERVER_TOKEN", "token-xyz"):
+            status, _, body = self._post("/mishmash/delegate", {
+                "v": 1,
+                "id": "ping-unauth-0001",
+                "from": "test-client",
+                "to": "autonomous-triad",
+                "capability": "intent",
+                "action": "ping",
+                "payload": {},
+            })
+            self.assertEqual(status, 401)
+            self.assertFalse(body.get("ok"))
+
+            status, _, body = self._post("/mishmash/delegate", {
+                "v": 1,
+                "id": "ping-auth-0001",
+                "from": "test-client",
+                "to": "autonomous-triad",
+                "capability": "intent",
+                "action": "ping",
+                "payload": {},
+            }, extra_headers={"Authorization": "Bearer token-xyz"})
+            self.assertEqual(status, 200)
+            self.assertTrue(body.get("ok"))
+
     def test_approval_contract_v2_and_payload_hash_enforcement(self):
         # Exocortex forwardApprove probes this before hashed approve.
         status, _, body = self._post("/mishmash/delegate", {
