@@ -1024,6 +1024,43 @@ class ModelSessionLimiter:
 GLOBAL_MODEL_SESSION_LIMITER = ModelSessionLimiter(max_concurrent=2)
 
 
+_VERDICT_CACHE_MODES = {"review_diff", "gate", "pre_commit"}
+
+
+def _resolve_cache_repo_head() -> str:
+    """Return current git HEAD SHA for cache keying, or '' if not in a git repo."""
+    try:
+        try:
+            from triad.procutil import clean_git_env
+        except ImportError:
+            from procutil import clean_git_env
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            env=clean_git_env(),
+        )
+        if res.returncode == 0:
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _advisor_model_signature(advisor: Dict[str, Any]) -> str:
+    """Build a short config signature so model/flag changes invalidate cached replies."""
+    return json.dumps(
+        {
+            "model": advisor.get("model") or "",
+            "display_name": advisor.get("display_name") or "",
+            "transport": advisor.get("transport") or "",
+            "execution_flags": advisor.get("execution_flags") or [],
+        },
+        sort_keys=True,
+    )
+
+
 def _execute_single_advisor(
     advisor: Dict[str, Any],
     prompt: str,
@@ -1034,11 +1071,13 @@ def _execute_single_advisor(
     track_circuit: bool = True,
     *,
     task: Optional[str] = None,
+    use_cache: bool = True,
 ) -> str:
     # Mock/test advisors are hermetic and must not consume the two live session slots.
+    adv_name = str(advisor.get("name", "")).lower()
     is_test_advisor = (
         str(advisor.get("role", "")).lower() == "test"
-        or str(advisor.get("name", "")).lower() == "mock"
+        or adv_name == "mock"
     )
     if is_test_advisor:
         start_time = time.time()
@@ -1046,6 +1085,33 @@ def _execute_single_advisor(
             advisor, prompt, context=context, diff=diff, mode=mode, task=task, timeout=timeout
         )
     else:
+        cache_key = None
+        if use_cache:
+            try:
+                repo_head = _resolve_cache_repo_head()
+                if repo_head:
+                    try:
+                        from triad.egress import sanitize_egress
+                        from triad.response_cache import get_cached_response, make_cache_key, put_cached_response
+                    except ImportError:
+                        from egress import sanitize_egress
+                        from response_cache import get_cached_response, make_cache_key, put_cached_response
+                    cache_key = make_cache_key(
+                        adv_name,
+                        mode,
+                        task,
+                        sanitize_egress(prompt or ""),
+                        diff=strip_diff_bloat(sanitize_egress(diff)) if diff else None,
+                        context=sanitize_egress(context) if context else None,
+                        repo_head=repo_head,
+                        model_sig=_advisor_model_signature(advisor),
+                    )
+                    cached = get_cached_response(cache_key)
+                    if cached is not None:
+                        return cached
+            except Exception:
+                cache_key = None
+
         try:
             # Two workers can each run a pair of advisors, so a request may wait
             # through two full holds before a slot frees.
@@ -1062,6 +1128,16 @@ def _execute_single_advisor(
         except SessionSlotUnavailable as exc:
             # Do not record a circuit outcome. Slot contention is not an advisor failure.
             return f"[Error: session slot unavailable: {exc}]"
+        if cache_key:
+            is_unapproved_verdict = (
+                mode in _VERDICT_CACHE_MODES
+                and not result.lstrip().startswith("VERDICT: APPROVED")
+            )
+            if not is_unapproved_verdict:
+                try:
+                    put_cached_response(cache_key, result, advisor=adv_name)
+                except Exception:
+                    pass
     try:
         _record_circuit_outcome(advisor, result, track_circuit=track_circuit, call_start_time=start_time)
     except Exception:

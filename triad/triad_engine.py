@@ -484,6 +484,13 @@ def cmd_doctor(args):
     if getattr(args, "reset_circuits", False):
         reset_circuit(None)
         print("[Triad] Cleared advisor circuit-breaker cooldowns.")
+    if getattr(args, "clear_cache", False):
+        try:
+            from triad.response_cache import clear_cache
+        except ImportError:
+            from response_cache import clear_cache
+        removed = clear_cache()
+        print(f"[Triad] Cleared {removed} cached advisor response(s).")
     quick = bool(getattr(args, "quick", False))
     report = collect_doctor_report(probe_advisors=not quick)
     if getattr(args, "json", False):
@@ -3629,12 +3636,41 @@ def _resolve_targeted_test_pattern(changed_files: List[str], cwd: Path) -> str:
     return "test_*.py"
 
 
-def _resolve_pytest_xdist_cmd(target: str, cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None) -> Optional[List[str]]:
+def _resolve_gate_python(cwd: Optional[Path] = None, extra_roots: Optional[List[Optional[Union[Path, str]]]] = None) -> str:
+    """Prefer a repo-local .venv Python over sys.executable (e.g., Windows Store Python during git hooks)."""
+    roots: List[Path] = []
+    for candidate_root in [cwd, *(extra_roots or [])]:
+        if candidate_root is None:
+            continue
+        p = Path(candidate_root)
+        if p not in roots:
+            roots.append(p)
+    rel_bins = ("Scripts/python.exe", "bin/python") if os.name == "nt" else ("bin/python", "Scripts/python.exe")
+    for root in roots:
+        for rel in rel_bins:
+            exe = root / ".venv" / rel
+            if exe.is_file():
+                try:
+                    ret, _, _ = run_subprocess_tree_safe([str(exe), "-c", "0"], cwd=root, timeout=5)
+                    if ret == 0:
+                        return str(exe)
+                except Exception:
+                    continue
+    return sys.executable
+
+
+def _resolve_pytest_xdist_cmd(
+    target: str,
+    cwd: Optional[Path] = None,
+    env: Optional[Dict[str, str]] = None,
+    python_exe: Optional[str] = None,
+) -> Optional[List[str]]:
     """Determine if pytest with xdist is available in current python environment or uv."""
+    py = python_exe or _resolve_gate_python(cwd)
     try:
-        ret, _, _ = run_subprocess_tree_safe([sys.executable, "-c", "import pytest, xdist"], cwd=cwd, env=env, timeout=5)
+        ret, _, _ = run_subprocess_tree_safe([py, "-c", "import pytest, xdist"], cwd=cwd, env=env, timeout=5)
         if ret == 0:
-            return [sys.executable, "-m", "pytest", "-n", "auto", "--dist=loadfile", "-p", "no:cacheprovider", target]
+            return [py, "-m", "pytest", "-n", "auto", "--dist=loadfile", "-p", "no:cacheprovider", target]
     except Exception:
         pass
     uv_bin = shutil.which("uv")
@@ -4001,6 +4037,7 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
                                 pass
                     py_test_env["PYTHONPATH"] = os.pathsep.join(sanitized_pp_parts)
 
+                gate_python = _resolve_gate_python(cwd, excluded_roots if in_worktree else None)
                 is_parallel_requested = bool(getattr(args, "parallel", False) or py_test_env.get("TRIAD_PARALLEL_TESTS") == "1")
                 target_patterns = [pat for pat in active_patterns if any((cwd / py_test_target).rglob(pat))] if is_targeted else active_patterns
                 if not target_patterns:
@@ -4009,26 +4046,26 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
                     if is_parallel_requested:
                         print("[Step 2/3] [Notice] --parallel is bypassed in isolated worktree mode (worktree runner manages process isolation).")
                     isolation_script = _build_python_isolation_script(cwd, py_test_target, excluded_roots, pattern=target_patterns)
-                    test_cmd = [sys.executable, "-c", isolation_script]
+                    test_cmd = [gate_python, "-c", isolation_script]
                 else:
                     if is_targeted:
                         if is_parallel_requested:
                             print("[Step 2/3] [Notice] --parallel is bypassed for targeted test pattern(s).")
                         if len(target_patterns) > 1:
                             multi_script = _build_python_multi_pattern_script(cwd, py_test_target, target_patterns)
-                            test_cmd = [sys.executable, "-c", multi_script]
+                            test_cmd = [gate_python, "-c", multi_script]
                         else:
-                            test_cmd = [sys.executable, "-m", "unittest", "discover", "-s", py_test_target, "-p", target_patterns[0]]
+                            test_cmd = [gate_python, "-m", "unittest", "discover", "-s", py_test_target, "-p", target_patterns[0]]
                     elif is_parallel_requested:
-                        xdist_cmd = _resolve_pytest_xdist_cmd(py_test_target, cwd=cwd, env=py_test_env)
+                        xdist_cmd = _resolve_pytest_xdist_cmd(py_test_target, cwd=cwd, env=py_test_env, python_exe=gate_python)
                         if xdist_cmd:
                             print("[Step 2/3] [PARALLEL] Executing test suite via pytest-xdist across CPU cores...")
                             test_cmd = xdist_cmd
                         else:
                             print("[Step 2/3] [Notice] pytest-xdist not detected; executing sequentially via unittest.")
-                            test_cmd = [sys.executable, "-m", "unittest", "discover", "-s", py_test_target, "-p", test_pattern]
+                            test_cmd = [gate_python, "-m", "unittest", "discover", "-s", py_test_target, "-p", test_pattern]
                     else:
-                        test_cmd = [sys.executable, "-m", "unittest", "discover", "-s", py_test_target, "-p", test_pattern]
+                        test_cmd = [gate_python, "-m", "unittest", "discover", "-s", py_test_target, "-p", test_pattern]
                 ret, out, err = run_subprocess_tree_safe(test_cmd, cwd=cwd, timeout=test_timeout, env=py_test_env)
 
                 diag_output = f"STDOUT:\n{out}\nSTDERR:\n{err}".strip()
@@ -6234,6 +6271,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc.add_argument("--quick", action="store_true", help="Skip the live Claude probe (saves a Claude Pro turn)")
     p_doc.add_argument("--json", action="store_true", help="Emit the structured report as JSON")
     p_doc.add_argument("--reset-circuits", action="store_true", help="Clear advisor circuit-breaker cooldowns before the audit")
+    p_doc.add_argument("--clear-cache", action="store_true", help="Clear cached advisor responses before the audit")
 
     # review
     p_rev = subparsers.add_parser("review", help="Review a git diff with the Advisory Council")
