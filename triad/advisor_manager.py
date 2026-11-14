@@ -294,11 +294,7 @@ def build_advisor_prompt(prompt: str, context: Optional[str] = None, diff: Optio
     if diff:
         diff = strip_diff_bloat(sanitize_egress(diff))
 
-    system_preamble = (
-        "You are the Lead Architect and Code Reviewer acting as the autonomous advisory council to Antigravity (the primary coding agent).\n"
-        "Antigravity has already handled the broad workspace and heavy context ingestion.\n"
-        "You are strictly in Advisory mode. Provide direct, high-density analysis, exact code snippets, or architectural flags.\n"
-    )
+    system_preamble = "Advisory reviewer for Antigravity. Dense, specific, cite path:line.\n"
 
     if mode == "review_diff":
         return (

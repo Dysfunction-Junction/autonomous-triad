@@ -110,18 +110,32 @@ def get_git_diff(cached: bool = False, head: bool = False, env: Optional[Dict[st
     *not* the working tree against HEAD~1 - that would silently fold uncommitted edits into a
     "review the last commit" request.
     """
-    cmd = ["git", "diff", "--no-color", "--no-ext-diff", "--no-textconv"]
-    if binary:
-        cmd.append("--binary")
-    if cached:
-        cmd.append("--cached")
-    elif head:
-        cmd.extend(["HEAD~1", "HEAD"])
-
     # Only sanitize Git env when crossing into ephemeral worktrees or explicitly requested.
     # Preserve caller env (including alternate GIT_INDEX_FILE) for direct workspace operations.
     exec_env = dict(os.environ if env is None else env)
     target_cwd = cwd or Path.cwd()
+
+    if binary:
+        cmd = ["git", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--binary"]
+    else:
+        try:
+            diff_ctx = max(0, int(exec_env.get("TRIAD_DIFF_CONTEXT", "1").strip() or "1"))
+        except ValueError:
+            diff_ctx = 1
+        cmd = [
+            "git",
+            "diff",
+            f"-U{diff_ctx}",
+            "--ignore-cr-at-eol",
+            "--no-color",
+            "--find-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+        ]
+    if cached:
+        cmd.append("--cached")
+    elif head:
+        cmd.extend(["HEAD~1", "HEAD"])
 
     res = subprocess.run(
         cmd,

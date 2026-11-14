@@ -388,6 +388,108 @@ class TestDiffBloatStripper(unittest.TestCase):
         self.assertIn("truncated to protect LLM context", neg_res)
         self.assertNotIn("+val = 1", neg_res)
 
+    def test_pure_rename_and_mode_only_emit_headers_only(self):
+        diff_text = (
+            "diff --git a/old_name.py b/new_name.py\n"
+            "similarity index 100%\n"
+            "rename from old_name.py\n"
+            "rename to new_name.py\n"
+            "diff --git a/bin/run.sh b/bin/run.sh\n"
+            "old mode 100644\n"
+            "new mode 100755\n"
+        )
+        once = strip_diff_bloat(diff_text)
+        self.assertIn("rename to new_name.py", once)
+        self.assertIn("new mode 100755", once)
+        self.assertNotIn("truncated", once)
+        self.assertEqual(once, strip_diff_bloat(once))
+
+    def test_pure_deletion_collapses_to_count_and_is_idempotent(self):
+        deleted_body = "\n".join(f"-old_line_{i}" for i in range(10))
+        diff_text = (
+            "diff --git a/dead.py b/dead.py\n"
+            "deleted file mode 100644\n"
+            "index 111..000\n"
+            "--- a/dead.py\n"
+            "+++ /dev/null\n"
+            "@@ -1,10 +0,0 @@\n"
+            f"{deleted_body}\n"
+        )
+        once = strip_diff_bloat(diff_text)
+        self.assertIn("[10 lines deleted]", once)
+        self.assertNotIn("-old_line_0", once)
+        self.assertEqual(once, strip_diff_bloat(once))
+
+    def test_default_budgets_and_env_overrides(self):
+        from unittest.mock import patch
+        from triad.advisor_manager import build_advisor_prompt
+
+        big_hunk = "\n".join(f"+line_{i}" for i in range(300))
+        diff_text = (
+            "diff --git a/big.py b/big.py\n"
+            "--- a/big.py\n"
+            "+++ b/big.py\n"
+            "@@ -1,1 +1,300 @@\n"
+            f"{big_hunk}\n"
+        )
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TRIAD_DIFF_MAX_FILE_LINES", None)
+            os.environ.pop("TRIAD_DIFF_MAX_TOTAL_LINES", None)
+            res = strip_diff_bloat(diff_text)
+        self.assertIn("+line_248", res)
+        self.assertNotIn("+line_249", res)
+
+        with patch.dict(os.environ, {"TRIAD_DIFF_MAX_FILE_LINES": "10"}):
+            os.environ.pop("TRIAD_DIFF_MAX_TOTAL_LINES", None)
+            res_env = strip_diff_bloat(diff_text)
+        self.assertIn("+line_8", res_env)
+        self.assertNotIn("+line_9", res_env)
+
+        prompt = build_advisor_prompt("check", diff="+x", mode="review_diff")
+        self.assertIn("Advisory reviewer for Antigravity. Dense, specific, cite path:line.", prompt)
+        self.assertNotIn("Lead Architect and Code Reviewer", prompt)
+
+    def test_get_git_diff_uses_compact_flags_and_env_context(self):
+        from unittest.mock import MagicMock, patch
+        from triad.triad_engine import get_git_diff
+
+        fake_res = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("triad.triad_engine.subprocess.run", return_value=fake_res) as mock_run:
+            with patch.dict(os.environ, {"TRIAD_DIFF_CONTEXT": "2"}):
+                get_git_diff(cached=True)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("-U2", cmd)
+        self.assertNotIn("-w", cmd)
+        self.assertIn("--ignore-cr-at-eol", cmd)
+        self.assertIn("--find-renames", cmd)
+        self.assertIn("--cached", cmd)
+
+    def test_get_git_diff_preserves_indentation_changes(self):
+        from triad.triad_engine import get_git_diff
+
+        git_env = clean_git_env()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, env=git_env, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, env=git_env, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, env=git_env, check=True, capture_output=True)
+            py_file = repo / "app.py"
+            py_file.write_text("if ok:\n    return 1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "app.py"], cwd=repo, env=git_env, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-c", "commit.gpgsign=false", "commit", "-m", "init"],
+                cwd=repo,
+                env=git_env,
+                check=True,
+                capture_output=True,
+            )
+
+            py_file.write_text("if ok:\nreturn 1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "app.py"], cwd=repo, env=git_env, check=True, capture_output=True)
+            diff_out = get_git_diff(cached=True, env=git_env, cwd=repo)
+        self.assertIn("-    return 1", diff_out)
+        self.assertIn("+return 1", diff_out)
+
 
 class TestDocOrAssetClassification(unittest.TestCase):
     def test_recognizes_docs(self):

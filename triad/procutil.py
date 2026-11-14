@@ -302,22 +302,45 @@ def _path_from_diff_git_header(first_line: str) -> str:
     return new or old
 
 
+DEFAULT_DIFF_MAX_FILE_LINES = 250
+DEFAULT_DIFF_MAX_TOTAL_LINES = 800
+_DELETED_SUMMARY_RE = re.compile(r"^\[\d+ lines deleted\]$")
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if raw:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return default
+
+
 def strip_diff_bloat(
     diff_text: Optional[str],
-    max_lines_per_file: int = 500,
-    max_total_lines: int = 2500,
+    max_lines_per_file: Optional[int] = None,
+    max_total_lines: Optional[int] = None,
 ) -> str:
     """
     Sanitize git diff text before passing to LLM advisors.
 
     Strips massive lockfiles, minified bundles, and binary assets while
     preserving the diff headers (so the LLM is aware which files changed).
-    Truncates abnormally large single-file diffs to protect context limits.
-    Enforces a global line budget across all files to guard against multi-file bloat.
+    Collapses pure renames/mode-only changes to headers and pure deletions to
+    `[N lines deleted]`. Truncates abnormally large single-file diffs and
+    enforces a global line budget across all files.
     Guaranteed strictly idempotent across single and multi-file diffs.
     """
     if not diff_text or not diff_text.strip():
         return ""
+
+    if max_lines_per_file is None:
+        max_lines_per_file = _env_positive_int("TRIAD_DIFF_MAX_FILE_LINES", DEFAULT_DIFF_MAX_FILE_LINES)
+    if max_total_lines is None:
+        max_total_lines = _env_positive_int("TRIAD_DIFF_MAX_TOTAL_LINES", DEFAULT_DIFF_MAX_TOTAL_LINES)
 
     file_chunks = re.split(r"(?m)(?=^diff --git |^\[Diff omitted: \d+ remaining files)", diff_text)
     sanitized_chunks = []
@@ -440,6 +463,29 @@ def strip_diff_bloat(
                     prev_truncated += int(m.group(1))
                     continue
                 hunk_lines.append(line)
+
+        # Pure renames / mode-only changes (headers only, no hunk lines): emit header only
+        if not hunk_lines and any(
+            h.startswith(("rename from ", "rename to ", "old mode ", "new mode ", "similarity index 100%"))
+            for h in header_lines
+        ):
+            sanitized_chunks.append("\n".join(header_lines).rstrip("\n"))
+            total_retained_lines += len(header_lines)
+            continue
+
+        # Pure-deletion files (`+++ /dev/null` with only `-` content lines or existing summary): collapse to header + `[N lines deleted]`
+        is_deleted_file = any(h.strip() == "+++ /dev/null" for h in header_lines)
+        if is_deleted_file and hunk_lines:
+            if len(hunk_lines) == 1 and _DELETED_SUMMARY_RE.match(hunk_lines[0]):
+                sanitized_chunks.append(chunk_clean)
+                total_retained_lines += len(lines)
+                continue
+            deleted_count = sum(1 for hl in hunk_lines if hl.startswith("-"))
+            if deleted_count > 0 and not any(hl.startswith("+") and not hl.startswith("+++ ") for hl in hunk_lines):
+                emitted = header_lines + [f"[{deleted_count} lines deleted]"]
+                sanitized_chunks.append("\n".join(emitted).rstrip("\n"))
+                total_retained_lines += len(emitted)
+                continue
 
         # Calculate budget for this file
         budget_remaining = max(0, max_total_lines - total_retained_lines - len(header_lines))
