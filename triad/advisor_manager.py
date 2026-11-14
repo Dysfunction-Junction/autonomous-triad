@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Any, Union, Tuple, Generator
 try:
     from triad.procutil import (
         kill_process_tree, is_failed_advisor_response, classify_advisor_response,
-        is_port_open, strip_diff_bloat,
+        is_port_open, strip_diff_bloat, is_approved_verdict,
     )
     from triad.paths import (
         expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH,
@@ -39,7 +39,7 @@ try:
 except ImportError:  # flat install (~/.agents/triad) without the package prefix
     from procutil import (
         kill_process_tree, is_failed_advisor_response, classify_advisor_response,
-        is_port_open, strip_diff_bloat,
+        is_port_open, strip_diff_bloat, is_approved_verdict,
     )
     from paths import (
         expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH,
@@ -303,7 +303,8 @@ def build_advisor_prompt(prompt: str, context: Optional[str] = None, diff: Optio
     if mode == "review_diff":
         return (
             f"{system_preamble}\n"
-            "TASK: Review this git diff for subtle bugs, race conditions, edge cases, type soundness, and architectural regressions.\n\n"
+            "TASK: Review this git diff for subtle bugs, race conditions, edge cases, type soundness, and architectural regressions.\n"
+            "Cite every finding as path:line with severity [BLOCKER|MAJOR|MINOR|NIT].\n\n"
             f"DIFF:\n```\n{diff or context or ''}\n```\n\n"
             f"ADDITIONAL CONTEXT / GOAL:\n{prompt}\n"
         )
@@ -1074,41 +1075,43 @@ def _execute_single_advisor(
     use_cache: bool = True,
 ) -> str:
     # Mock/test advisors are hermetic and must not consume the two live session slots.
+    # Named `_is_test` so it does not shadow the module-level is_test_advisor() helper.
     adv_name = str(advisor.get("name", "")).lower()
-    is_test_advisor = (
+    _is_test = (
         str(advisor.get("role", "")).lower() == "test"
         or adv_name == "mock"
     )
-    if is_test_advisor:
+    cache_key: Optional[str] = None
+    if _is_test:
         start_time = time.time()
         result = _execute_single_advisor_raw(
             advisor, prompt, context=context, diff=diff, mode=mode, task=task, timeout=timeout
         )
     else:
-        cache_key = None
         if use_cache:
             try:
-                repo_head = _resolve_cache_repo_head()
-                if repo_head:
-                    try:
-                        from triad.egress import sanitize_egress
-                        from triad.response_cache import get_cached_response, make_cache_key, put_cached_response
-                    except ImportError:
-                        from egress import sanitize_egress
-                        from response_cache import get_cached_response, make_cache_key, put_cached_response
-                    cache_key = make_cache_key(
-                        adv_name,
-                        mode,
-                        task,
-                        sanitize_egress(prompt or ""),
-                        diff=strip_diff_bloat(sanitize_egress(diff)) if diff else None,
-                        context=sanitize_egress(context) if context else None,
-                        repo_head=repo_head,
-                        model_sig=_advisor_model_signature(advisor),
-                    )
-                    cached = get_cached_response(cache_key)
-                    if cached is not None:
-                        return cached
+                try:
+                    from triad.egress import sanitize_egress
+                    from triad.response_cache import cache_enabled, get_cached_response, make_cache_key, put_cached_response
+                except ImportError:
+                    from egress import sanitize_egress
+                    from response_cache import cache_enabled, get_cached_response, make_cache_key, put_cached_response
+                if cache_enabled():
+                    repo_head = _resolve_cache_repo_head()
+                    if repo_head:
+                        cache_key = make_cache_key(
+                            adv_name,
+                            mode,
+                            task,
+                            sanitize_egress(prompt or ""),
+                            diff=strip_diff_bloat(sanitize_egress(diff)) if diff else None,
+                            context=sanitize_egress(context) if context else None,
+                            repo_head=repo_head,
+                            model_sig=_advisor_model_signature(advisor),
+                        )
+                        cached = get_cached_response(cache_key)
+                        if cached is not None:
+                            return cached
             except Exception:
                 cache_key = None
 
@@ -1128,20 +1131,17 @@ def _execute_single_advisor(
         except SessionSlotUnavailable as exc:
             # Do not record a circuit outcome. Slot contention is not an advisor failure.
             return f"[Error: session slot unavailable: {exc}]"
-        if cache_key:
-            is_unapproved_verdict = (
-                mode in _VERDICT_CACHE_MODES
-                and not result.lstrip().startswith("VERDICT: APPROVED")
-            )
-            if not is_unapproved_verdict:
-                try:
-                    put_cached_response(cache_key, result, advisor=adv_name)
-                except Exception:
-                    pass
     try:
         _record_circuit_outcome(advisor, result, track_circuit=track_circuit, call_start_time=start_time)
     except Exception:
         pass
+    if not _is_test and cache_key and not is_failed_advisor_response(result):
+        is_unapproved_verdict = mode in _VERDICT_CACHE_MODES and not is_approved_verdict(result)
+        if not is_unapproved_verdict:
+            try:
+                put_cached_response(cache_key, result, advisor=adv_name)
+            except Exception:
+                pass
     return result
 
 

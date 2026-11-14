@@ -470,6 +470,163 @@ def strip_diff_bloat(
     return "\n\n".join(sanitized_chunks)
 
 
+_CITE_RE = re.compile(r"([A-Za-z0-9_.\-/\\]+?\.[A-Za-z0-9_]+)(?::L?|#L|\s+line\s+|\s+L)(\d+)", re.IGNORECASE)
+_HUNK_HDR_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_LEADING_DOT_SLASH_RE = re.compile(r"^(?:\./)+")
+_VERDICT_APPROVED_RE = re.compile(r"^[\s*_`>#-]*VERDICT:\s*APPROVED[\s*_`.!]*$", re.IGNORECASE)
+_VERDICT_REJECTED_RE = re.compile(r"VERDICT:\s*REJECTED", re.IGNORECASE)
+
+SYNTH_DIFF_BUDGET_CHARS = 10_000
+SYNTH_CONTEXT_BUDGET_CHARS = 2_000
+CITATION_LINE_SLACK = 3
+
+
+def is_approved_verdict(text: Optional[str]) -> bool:
+    """True only when line 1 is `VERDICT: APPROVED` (light markdown tolerated) and no REJECTED verdict appears anywhere."""
+    if not text or not text.strip():
+        return False
+    if _VERDICT_REJECTED_RE.search(text):
+        return False
+    first = text.strip().splitlines()[0]
+    return bool(_VERDICT_APPROVED_RE.match(first))
+
+
+def extract_cited_hunks(
+    diff: str,
+    responses: List[str],
+    *,
+    slack: int = CITATION_LINE_SLACK,
+    plain_cap: int = SYNTH_DIFF_BUDGET_CHARS,
+) -> str:
+    """Return CHANGED FILES list plus only unified-diff hunks cited as path:line in responses.
+
+    A citation matches a hunk when its line falls within `slack` lines of the hunk's new-file range.
+    Diffs without `diff --git` markers cannot be split per file, so they are returned whole up to `plain_cap`.
+    """
+    if not diff:
+        return ""
+    if "diff --git " not in diff:
+        if len(diff) <= plain_cap:
+            return diff
+        return diff[:plain_cap] + f"\n[... diff truncated, {len(diff) - plain_cap} chars omitted ...]"
+    citations: List[tuple] = []
+    for resp in responses or []:
+        if not resp:
+            continue
+        for m in _CITE_RE.finditer(resp):
+            cite_path = _LEADING_DOT_SLASH_RE.sub("", m.group(1).replace("\\", "/"))
+            try:
+                cite_line = int(m.group(2))
+            except ValueError:
+                continue
+            citations.append((cite_path, cite_line))
+
+    file_blocks: List[tuple] = []
+    current_path: Optional[str] = None
+    current_headers: List[str] = []
+    current_hunks: List[tuple] = []
+    active_hunk_lines: Optional[List[str]] = None
+    active_hunk_range = (0, 0)
+
+    def _flush_hunk():
+        nonlocal active_hunk_lines
+        if active_hunk_lines is not None:
+            current_hunks.append((active_hunk_range[0], active_hunk_range[1], active_hunk_lines))
+            active_hunk_lines = None
+
+    def _flush_file():
+        _flush_hunk()
+        if current_path is not None:
+            file_blocks.append((current_path, list(current_headers), list(current_hunks)))
+
+    for raw_line in diff.splitlines():
+        if raw_line.startswith("diff --git "):
+            _flush_file()
+            parts = raw_line.split()
+            b_path = parts[-1] if parts else ""
+            if b_path.startswith("b/"):
+                b_path = b_path[2:]
+            current_path = b_path.replace("\\", "/")
+            current_headers = [raw_line]
+            current_hunks = []
+            continue
+        if current_path is None:
+            continue
+        if raw_line.startswith("@@ "):
+            _flush_hunk()
+            hm = _HUNK_HDR_RE.match(raw_line)
+            start = int(hm.group(1)) if hm else 1
+            count = int(hm.group(2)) if (hm and hm.group(2) is not None) else 1
+            end = start + max(count, 1) - 1
+            active_hunk_range = (start, end)
+            active_hunk_lines = [raw_line]
+        elif active_hunk_lines is not None:
+            active_hunk_lines.append(raw_line)
+        else:
+            current_headers.append(raw_line)
+            if raw_line.startswith("+++ b/"):
+                current_path = raw_line[6:].strip().replace("\\", "/")
+
+    _flush_file()
+
+    if not file_blocks:
+        if len(diff) <= plain_cap:
+            return diff
+        return diff[:plain_cap] + f"\n[... diff truncated, {len(diff) - plain_cap} chars omitted ...]"
+
+    files_section = "CHANGED FILES:\n" + "\n".join(f"- {fp}" for fp, _, _ in file_blocks)
+    if not citations:
+        return files_section
+
+    def _path_matches(diff_path: str, cite_path: str) -> bool:
+        return diff_path == cite_path or diff_path.endswith("/" + cite_path) or cite_path.endswith("/" + diff_path)
+
+    kept_sections: List[str] = []
+    for fp, headers, hunks in file_blocks:
+        matched_hunks = [
+            "\n".join(h_lines)
+            for h_start, h_end, h_lines in hunks
+            if any(
+                _path_matches(fp, cp) and (h_start - slack) <= cl <= (h_end + slack)
+                for cp, cl in citations
+            )
+        ]
+        if matched_hunks:
+            kept_sections.append("\n".join(headers + matched_hunks))
+
+    if not kept_sections:
+        return files_section
+    return files_section + "\n\n" + "\n\n".join(kept_sections)
+
+
+def prepare_synthesis_evidence(
+    diff: Optional[str],
+    context: Optional[str],
+    responses: List[str],
+    *,
+    diff_budget: int = SYNTH_DIFF_BUDGET_CHARS,
+    context_budget: int = SYNTH_CONTEXT_BUDGET_CHARS,
+) -> tuple:
+    """Return (diff_text, context_text) for a synthesis prompt without silently losing evidence.
+
+    - A diff delivered as `context` (callers sometimes do this) is treated as the diff.
+    - Diffs within budget go in whole; larger ones are trimmed to cited hunks.
+    - Long context is truncated with an explicit note instead of being dropped.
+    """
+    if not diff and context and "diff --git " in context:
+        diff, context = context, None
+    diff_text = ""
+    if diff:
+        diff_text = diff if len(diff) <= diff_budget else extract_cited_hunks(diff, responses)
+    ctx_text = None
+    if context:
+        if len(context) <= context_budget:
+            ctx_text = context
+        else:
+            ctx_text = context[:context_budget] + f"\n(context truncated, {len(context) - context_budget} chars omitted)"
+    return diff_text, ctx_text
+
+
 __all__ = [
     "clean_git_env",
     "kill_process_tree",
@@ -487,4 +644,7 @@ __all__ = [
     "CODE_OR_CONFIG_EXTENSIONS",
     "is_doc_or_asset_file",
     "strip_diff_bloat",
+    "extract_cited_hunks",
+    "prepare_synthesis_evidence",
+    "is_approved_verdict",
 ]

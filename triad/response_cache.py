@@ -20,6 +20,7 @@ except ImportError:
 PROMPT_SCHEMA_VERSION = "1"
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
+STALE_TMP_SECONDS = 300
 
 
 def cache_enabled() -> bool:
@@ -167,9 +168,16 @@ def get_cached_response(
 
 
 def _prune_lru(root: Path, max_bytes: int) -> None:
-    """Evict oldest-mtime cache entries until total size is within max_bytes."""
+    """Evict oldest-mtime cache entries (and stale .tmp files) until total size is within max_bytes."""
     if max_bytes <= 0 or not root.exists():
         return
+    now = time.time()
+    for tmp in list(root.rglob("*.tmp")):
+        try:
+            if now - tmp.stat().st_mtime > STALE_TMP_SECONDS:
+                tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
     entries = []
     total = 0
     for p in root.rglob("*.json"):
@@ -228,6 +236,10 @@ def put_cached_response(
         },
         ensure_ascii=False,
     )
+
+    effective_max = cache_max_bytes(max_bytes)
+    if effective_max > 0 and len(payload.encode("utf-8")) > effective_max:
+        return False
 
     tmp_path: Optional[str] = None
     try:

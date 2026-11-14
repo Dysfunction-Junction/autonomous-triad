@@ -4,6 +4,7 @@ Runs Claude Code and OpenAI Codex concurrently, synthesizes agreements,
 isolated points, and contradictions, and logs full telemetry.
 """
 
+import os
 import sys
 import re
 import json
@@ -18,14 +19,14 @@ try:
         query_configured_advisor, get_advisors, is_test_advisor, advisor_is_ready,
         dispatch_allowed, rank_advisors_for_task,
     )
-    from triad.procutil import is_failed_advisor_response, strip_diff_bloat
+    from triad.procutil import is_failed_advisor_response, strip_diff_bloat, prepare_synthesis_evidence, is_approved_verdict
     from triad.circuit import is_circuit_open
 except ImportError:
     from advisor_manager import (
         query_configured_advisor, get_advisors, is_test_advisor, advisor_is_ready,
         dispatch_allowed, rank_advisors_for_task,
     )
-    from procutil import is_failed_advisor_response, strip_diff_bloat
+    from procutil import is_failed_advisor_response, strip_diff_bloat, prepare_synthesis_evidence, is_approved_verdict
     from circuit import is_circuit_open
 
 try:
@@ -157,13 +158,14 @@ def build_synthesis_prompt(
     adv2_label: str = "OpenAI Codex",
 ) -> str:
     """Constructs rigorous 4-part synthesis prompt with breakout-resistant fencing."""
+    cited_diff, short_context = prepare_synthesis_evidence(diff, context, [claude_resp, codex_resp])
     return (
         "You are the Chief Adjudicator of an elite Multi-Agent Advisory Council.\n"
         "Two independent premier AI models evaluated the same task. Your goal is NOT to average their answers, "
         "but to conduct a rigorous, evidence-based adjudication.\n\n"
         f"ORIGINAL TASK / QUERY:\n{prompt}\n\n"
-        + (f"DIFF:\n{_fence(diff)}\n\n" if diff else "")
-        + (f"CONTEXT:\n{_fence(context)}\n\n" if context else "")
+        + (f"DIFF:\n{_fence(cited_diff)}\n\n" if cited_diff else "")
+        + (f"CONTEXT:\n{_fence(short_context)}\n\n" if short_context else "")
         + f"--- ADVISOR 1 ({adv1_label}) REVIEW ---\n{_fence(claude_resp)}\n\n"
         f"--- ADVISOR 2 ({adv2_label}) REVIEW ---\n{_fence(codex_resp)}\n\n"
         "Provide your adjudication in exactly these 4 structured sections:\n"
@@ -188,13 +190,14 @@ def build_adversarial_synthesis_prompt(
     red_label: str = "Red Team",
 ) -> str:
     """Constructs adversarial referee prompt adjudicating Generator (Blue) vs Adversary (Red) with dynamic fencing."""
+    cited_diff, short_context = prepare_synthesis_evidence(diff, context, [blue_resp, red_resp])
     return (
         "You are the Chief Security Referee of the Triad Adversarial Arena.\n"
         "Blue Team drafted the proposed solution. Red Team conducted an aggressive adversarial attack "
         "to find race conditions, unhandled edge cases, security regressions, or generate failing tests.\n\n"
         f"TARGET TASK / CODE:\n{prompt}\n\n"
-        + (f"DIFF:\n{_fence(diff)}\n\n" if diff else "")
-        + (f"CONTEXT:\n{_fence(context)}\n\n" if context else "")
+        + (f"DIFF:\n{_fence(cited_diff)}\n\n" if cited_diff else "")
+        + (f"CONTEXT:\n{_fence(short_context)}\n\n" if short_context else "")
         + f"--- BLUE TEAM PROPOSAL ({blue_label}) ---\n{_fence(blue_resp)}\n\n"
         f"--- RED TEAM ATTACK AUDIT ({red_label}) ---\n{_fence(red_resp)}\n\n"
         "Deliver your authoritative verdict in exactly 4 sections:\n"
@@ -278,6 +281,44 @@ def parse_adversarial_verdict(synthesis: str) -> Optional[str]:
         return None
 
     return candidate
+
+
+# Severity tags that block the unanimous shortcut: bracketed ([MAJOR]), labelled (MAJOR:), or leading a line.
+# Plain prose such as "no major issues" or "No BLOCKER/MAJOR findings" does not match.
+_HIGH_SEVERITY_RE = re.compile(
+    r"\[(?:BLOCKER|MAJOR)\]"
+    r"|\b(?:BLOCKER|MAJOR)\s*[:\-\u2013\u2014|]"
+    r"|^[\s>*_`#\-\d.)]*(?:BLOCKER|MAJOR)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_MINOR_NOTE_RE = re.compile(r".*\b(?:MINOR|NIT)\b.*", re.IGNORECASE)
+
+
+def _try_unanimous_approved_synthesis(resp1: str, resp2: str) -> Optional[str]:
+    """Return a deterministic synthesis when both advisors approve with no BLOCKER/MAJOR findings.
+
+    `VERDICT: APPROVED` is on line 1 so first-line verdict parsers read it correctly.
+    """
+    if os.environ.get("TRIAD_SKIP_UNANIMOUS_SYNTH", "1").strip().lower() in ("0", "false", "no", "off"):
+        return None
+    if not (is_approved_verdict(resp1) and is_approved_verdict(resp2)):
+        return None
+    if _HIGH_SEVERITY_RE.search(resp1) or _HIGH_SEVERITY_RE.search(resp2):
+        return None
+    notes: List[str] = []
+    seen = set()
+    for resp in (resp1, resp2):
+        for m in _MINOR_NOTE_RE.finditer(resp):
+            line = m.group(0).strip()
+            if line and line not in seen:
+                seen.add(line)
+                notes.append(line)
+    notes_str = "; ".join(notes) if notes else "None"
+    return (
+        "VERDICT: APPROVED\n"
+        "### Unanimous: APPROVED\n"
+        f"Both advisors approved. Minor notes: {notes_str}"
+    )
 
 
 def query_competition_council(
@@ -456,38 +497,42 @@ def query_competition_council(
             f"{adv1_name}: {resp1}\n{adv2_name}: {resp2}"
         )
     else:
-        if adversarial:
-            # Blue never judges itself. Prefer an independent judge by lane strength.
-            if adv1_name == adv2_name == "mock":
-                synth_engine = "mock"
-            else:
-                synth_engine = select_judge((adv1_name, adv2_name)) or (
-                    adv2_name if not failed2 else adv1_name
-                )
-            synth_prompt = build_adversarial_synthesis_prompt(
-                prompt, resp1, resp2, context=context, diff=diff,
-                blue_label=f"Blue Team ({_label_for(adv1_name)})",
-                red_label=f"Red Team ({_label_for(adv2_name)})",
-            )
+        unanimous = None if (adversarial or failed1 or failed2) else _try_unanimous_approved_synthesis(resp1, resp2)
+        if unanimous is not None:
+            synthesis = unanimous
         else:
-            synth_engine = select_judge((adv1_name, adv2_name))
-            if not synth_engine:
-                synth_engine = adv2_name if failed1 and not failed2 else adv1_name
-            synth_prompt = build_synthesis_prompt(
-                prompt, resp1, resp2, context=context, diff=diff,
-                adv1_label=_label_for(adv1_name), adv2_label=_label_for(adv2_name),
-            )
-        synthesis = query_configured_advisor(synth_engine, synth_prompt, mode="general", timeout=synth_timeout)
-        if is_failed_advisor_response(synthesis):
-            # Retry the successful competitor once. Never the judge again. Never a fourth model.
-            if not failed1 and adv1_name != synth_engine:
-                other = adv1_name
-            elif not failed2 and adv2_name != synth_engine:
-                other = adv2_name
+            if adversarial:
+                # Blue never judges itself. Prefer an independent judge by lane strength.
+                if adv1_name == adv2_name == "mock":
+                    synth_engine = "mock"
+                else:
+                    synth_engine = select_judge((adv1_name, adv2_name)) or (
+                        adv2_name if not failed2 else adv1_name
+                    )
+                synth_prompt = build_adversarial_synthesis_prompt(
+                    prompt, resp1, resp2, context=context, diff=diff,
+                    blue_label=f"Blue Team ({_label_for(adv1_name)})",
+                    red_label=f"Red Team ({_label_for(adv2_name)})",
+                )
             else:
-                other = adv2_name if adv1_name == synth_engine else adv1_name
-            if other != synth_engine:
-                synthesis = query_configured_advisor(other, synth_prompt, mode="general", timeout=synth_timeout)
+                synth_engine = select_judge((adv1_name, adv2_name))
+                if not synth_engine:
+                    synth_engine = adv2_name if failed1 and not failed2 else adv1_name
+                synth_prompt = build_synthesis_prompt(
+                    prompt, resp1, resp2, context=context, diff=diff,
+                    adv1_label=_label_for(adv1_name), adv2_label=_label_for(adv2_name),
+                )
+            synthesis = query_configured_advisor(synth_engine, synth_prompt, mode="general", timeout=synth_timeout)
+            if is_failed_advisor_response(synthesis):
+                # Retry the successful competitor once. Never the judge again. Never a fourth model.
+                if not failed1 and adv1_name != synth_engine:
+                    other = adv1_name
+                elif not failed2 and adv2_name != synth_engine:
+                    other = adv2_name
+                else:
+                    other = adv2_name if adv1_name == synth_engine else adv1_name
+                if other != synth_engine:
+                    synthesis = query_configured_advisor(other, synth_prompt, mode="general", timeout=synth_timeout)
 
     elapsed = time.time() - start_time
     is_synth_failed = is_failed_advisor_response(synthesis)
