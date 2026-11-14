@@ -19,7 +19,7 @@ A = pathlib.Path(os.environ.get("TRIAD_A", r"C:\Users\micha\projects\autonomous-
 EXO = pathlib.Path(os.environ.get("TRIAD_EXO", r"C:\Users\micha\projects\sovereign-exocortex"))
 B = EXO / "packages" / "triad"
 BROKER = EXO.parent / "sovereign-exocortex-broker"
-OUT = A / "docs" / "TRIAD_V34_MERGE_MAP.md"
+OUT = pathlib.Path(os.environ.get("TRIAD_OUT", str(A / "docs" / "TRIAD_V34_MERGE_MAP.md")))
 VENV_PY = A / ".venv" / "Scripts" / "python.exe"
 PYTHON = str(VENV_PY) if VENV_PY.exists() else sys.executable
 

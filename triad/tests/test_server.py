@@ -246,6 +246,7 @@ class TestTriadServer(unittest.TestCase):
             patch_content = b"# empty dummy patch\n"
             dummy_sha = hashlib.sha256(patch_content).hexdigest()
             temp_patch_path = str(PATCHES_DIR / "test_conflict.patch")
+            PATCHES_DIR.mkdir(parents=True, exist_ok=True)
             with open(temp_patch_path, "wb") as pf:
                 pf.write(patch_content)
 
@@ -800,6 +801,19 @@ class TestTriadServer(unittest.TestCase):
         risk_mix, app_mix, _ = _evaluate_action_risk(cls_device, "factory reset the phone and check status")
         self.assertEqual(risk_mix, "medium")
         self.assertTrue(app_mix)
+
+        # 12b. Unlisted actuation verbs must not slip past the read-only allowlist
+        for phrase in (
+            "check phone then reply yes to bob",
+            "read sms and forward it to alice",
+            "get phone battery then transfer funds",
+            "list phone apps and grant camera permission",
+            "show phone status and toggle airplane mode",
+        ):
+            risk_v, app_v, reasons_v = _evaluate_action_risk(cls_device, phrase)
+            self.assertEqual(risk_v, "medium", phrase)
+            self.assertTrue(app_v, phrase)
+            self.assertIn("device_actuation", reasons_v, phrase)
 
         # 13. rm flag order variations
         risk_rm1, app_rm1, _ = _evaluate_action_risk(cls_general, "rm /tmp/x -rf")

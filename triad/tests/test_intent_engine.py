@@ -142,7 +142,7 @@ class TestIntentEngine(unittest.TestCase):
     def test_micro_task_routing(self):
         res = classify_intent("format this file and sort imports")
         self.assertEqual(res.intent, "MICRO")
-        self.assertEqual(res.suggested_engine, "ollama")
+        self.assertEqual(res.suggested_engine, "llama")
 
     def test_bare_token_and_migration_not_high_stakes(self):
         self.assertFalse(is_high_stakes("design tokens for the landing page"))

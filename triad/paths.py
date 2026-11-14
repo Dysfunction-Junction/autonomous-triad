@@ -129,13 +129,24 @@ PORT_NEO4J_BOLT = _safe_int_env("TRIAD_PORT_NEO4J_BOLT", _safe_int_env("NEO4J_BO
 PORT_LLAMA_SERVER = _safe_int_env("TRIAD_PORT_LLAMA_SERVER", 8080)
 PORT_OLLAMA = _safe_int_env("TRIAD_PORT_OLLAMA", 11434)
 
-# --- Local llama-server context budget (F2) -----------------------------------
-# Transcribed from autonomous-triad-v34 worktree text. Do not cherry-pick that branch.
+# Checkout that holds this module. sync_manager imports it; a missing name used to
+# force the fallback branch on every call.
+TRIAD_DIR: Path = Path(__file__).resolve().parent
+
+# --- Local advisor backend ----------------------------------------------------
+# Canonical local advisor is llama.cpp. TRIAD_LOCAL_BACKEND=ollama (or the
+# compatibility variable EXOCORTEX_TRIAD_BACKEND) restores the subprocess override.
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 _N_CTX_CACHE: Optional[int] = None
 _N_CTX_TRIED = False
 
 
+def local_backend() -> str:
+    """``llamacpp`` (default) or ``ollama``. Read per call so tests can flip it."""
+    raw = os.environ.get("TRIAD_LOCAL_BACKEND", "").strip().lower()
+    if not raw:
+        raw = os.environ.get("EXOCORTEX_TRIAD_BACKEND", "").strip().lower()
+    return "ollama" if raw == "ollama" else "llamacpp"
 def validate_loopback_url(raw: str) -> str:
     """Return ``raw`` without a trailing slash if it is plain http on loopback, else raise ValueError."""
     from urllib.parse import urlsplit
@@ -158,6 +169,19 @@ def llama_cpp_url() -> str:
     return validate_loopback_url(raw)
 
 
+DEFAULT_LLAMA_CPP_URL = f"http://127.0.0.1:{_safe_int_env('TRIAD_PORT_LLAMA_SERVER', 8080)}"
+
+
+def local_llm_port() -> int:
+    """Port the local-advisor readiness probe checks (8080 by default, 11434 for the Ollama override)."""
+    from urllib.parse import urlsplit
+
+    if local_backend() == "ollama":
+        return _safe_int_env("TRIAD_PORT_OLLAMA", 11434)
+    try:
+        return urlsplit(llama_cpp_url()).port or 80
+    except ValueError:
+        return _safe_int_env("TRIAD_PORT_LLAMA_SERVER", 8080)
 def llama_n_ctx() -> Optional[int]:
     """Read ``n_ctx`` from llama-server ``/props`` once per process. None if the server cannot be read."""
     global _N_CTX_CACHE, _N_CTX_TRIED
@@ -203,15 +227,49 @@ def exceeds_context_budget(prompt: str, max_tokens: int = 1024, fraction: float 
     return None
 
 
+def state_dir() -> Path:
+    """Root for runtime state. ``TRIAD_STATE_DIR`` or ``~/.triad``."""
+    raw = os.environ.get("TRIAD_STATE_DIR", "").strip()
+    if raw:
+        return Path(expand_path(raw))
+    return HOME / ".triad"
+
+
+def read_state_file(relative: str, *legacy_paths: Path) -> Path:
+    """New state path when it exists, otherwise the first legacy file that exists."""
+    new = state_dir() / relative
+    try:
+        if new.exists():
+            return new
+    except OSError:
+        pass
+    for old in legacy_paths:
+        try:
+            if old.exists():
+                return old
+        except OSError:
+            continue
+    return new
+
+
+def write_state_file(relative: str) -> Path:
+    """Path under the state dir. Creates parent directories. Callers write only here."""
+    path = state_dir() / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 # --- Agent Mesh MCP -----------------------------------------------------------
 AGENT_MESH_DIR: Path = resolve_file_path("TRIAD_AGENT_MESH_DIR", HOME / "projects" / "agent-mesh-mcp")
 AGENT_MESH_SERVER: Path = resolve_file_path("TRIAD_AGENT_MESH_SERVER", AGENT_MESH_DIR / "dist" / "server.js")
 
 __all__ = [
-    "HOME", "LOCAL_APPDATA", "expand_path", "resolve_binary_path", "resolve_file_path",
+    "HOME", "LOCAL_APPDATA", "TRIAD_DIR", "expand_path", "resolve_binary_path", "resolve_file_path",
     "CLAUDE_PATH", "CODEX_PATH", "AGY_PATH", "HERMES_PATH", "LLAMA_SERVER_PATH", "OLLAMA_PATH",
     "CODEX_AUTH", "MEM0_SCRIPT", "ANDROID_RELAY_ENV",
     "AGENT_MESH_DIR", "AGENT_MESH_SERVER",
-    "PORT_HERMES_RELAY", "PORT_PIECES_PROXY", "PORT_TRIAD_SERVER", "PORT_PIECES_OS", "PORT_LLAMA_SERVER", "PORT_OLLAMA",
-    "LOOPBACK_HOSTS", "validate_loopback_url", "llama_cpp_url", "llama_n_ctx", "exceeds_context_budget",
+    "PORT_HERMES_RELAY", "PORT_PIECES_PROXY", "PORT_EXOCORTEX_DAEMON", "PORT_TRIAD_SERVER",
+    "PORT_PIECES_OS", "PORT_PIECES_FOR_ALL", "PORT_AGENT_MESH_MCP", "PORT_NEO4J_BOLT",
+    "PORT_LLAMA_SERVER", "PORT_OLLAMA",
+    "DEFAULT_LLAMA_CPP_URL", "LOOPBACK_HOSTS",
+    "local_backend", "validate_loopback_url", "llama_cpp_url", "local_llm_port", "llama_n_ctx",
+    "exceeds_context_budget", "state_dir", "read_state_file", "write_state_file",
 ]

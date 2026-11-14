@@ -112,11 +112,11 @@ def test_tool_registry():
 
 def test_router_default_local_orchestrator(monkeypatch):
     router = ZeroCostRouter()
-    # Default route should always be local compute (Tier 3)
+    # Short turns stay on the local tier. Score-based escalation is Phase 2.1.
     dec = router.select_route("Write a python script to parse CSV")
     assert dec.selected_tier == ModelTier.TIER_3_LOCAL
 
-    # Even high complexity defaults to local unless explicitly delegated
+    # High complexity still starts local unless the caller delegates or the context budget is exceeded.
     dec_complex = router.select_route("Refactor distributed state machine and fix race conditions")
     assert dec_complex.selected_tier == ModelTier.TIER_3_LOCAL
 

@@ -20,6 +20,7 @@ import gc
 import json
 import hashlib
 import threading
+import zlib
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Optional, Union, List, Dict, Any, Generator, Tuple
@@ -161,6 +162,14 @@ def _discover_repo_from_worktree(worktree_path: Path) -> Optional[Path]:
     return None
 
 
+def reject_option_like_ref(ref: object, what: str = "git ref") -> str:
+    """Refuse refs/commit-ish values git could parse as an option (leading '-') or that are empty/NUL-bearing."""
+    text = str(ref)
+    if not text.strip() or text.startswith("-") or "\x00" in text:
+        raise ValueError(f"Invalid {what} {text!r}: must be non-empty and must not start with '-'")
+    return text
+
+
 def create_worktree(
     repo_path: Union[str, Path],
     branch_or_commit: str = "HEAD",
@@ -183,6 +192,7 @@ def create_worktree(
     Returns:
         Path: Resolved absolute path to the newly created worktree.
     """
+    branch_or_commit = reject_option_like_ref(branch_or_commit, "branch or commit")
     root = get_repo_root(repo_path, env=env)
 
     if target_path:
@@ -194,7 +204,7 @@ def create_worktree(
     cmd = ["git", "-C", str(root), "worktree", "add"]
     if detach:
         cmd.append("--detach")
-    cmd.extend([str(wt_path), str(branch_or_commit)])
+    cmd.extend(["--", str(wt_path), str(branch_or_commit)])
 
     run_env = clean_git_env(base_env=env) if env is not None else clean_git_env()
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=run_env)
@@ -572,13 +582,27 @@ def _check_dependency_graph_compatibility(parent_root: Path, wt_root: Path) -> T
                     if p_deps != w_deps:
                         return False, "Candidate package.json dependencies differ from parent installation"
                 except Exception:
-                    if p_file.read_bytes() != w_file.read_bytes():
+                    p_raw = p_file.read_bytes().replace(b"\r\n", b"\n")
+                    w_raw = w_file.read_bytes().replace(b"\r\n", b"\n")
+                    if p_raw != w_raw:
                         return False, f"Candidate {name} differs from parent"
             else:
-                if p_file.read_bytes() != w_file.read_bytes():
+                p_raw = p_file.read_bytes()
+                w_raw = w_file.read_bytes()
+                if not name.endswith(".lockb"):
+                    p_raw = p_raw.replace(b"\r\n", b"\n")
+                    w_raw = w_raw.replace(b"\r\n", b"\n")
+                if p_raw != w_raw:
                     return False, f"Candidate lockfile {name} differs from parent installation"
         elif p_file.exists() != w_file.exists():
-            return False, f"Dependency manifest presence mismatch for {name}"
+            # A worktree created from HEAD does not contain uncommitted manifests.
+            # Only a manifest that is already in HEAD can be missing from that worktree.
+            in_head = subprocess.run(
+                ["git", "-C", str(parent_root), "cat-file", "-e", f"HEAD:{name}"],
+                capture_output=True,
+            ).returncode == 0
+            if in_head or w_file.exists():
+                return False, f"Dependency manifest presence mismatch for {name}"
     return True, None
 
 
@@ -818,100 +842,151 @@ def deprovision_worktree_dependencies(worktree_path: Union[str, Path]) -> None:
     target_manifest = manifest_file if manifest_file.exists() else (old_manifest_file if old_manifest_file.exists() else None)
 
     if target_manifest and target_manifest.exists():
-        try:
-            raw_data = json.loads(target_manifest.read_text(encoding="utf-8"))
-            entries: List[str] = []
-            if isinstance(raw_data, dict):
-                # Validate schema
-                if raw_data.get("version") == 1 and isinstance(raw_data.get("entries"), list):
-                    stored_wt = raw_data.get("worktree")
-                    if stored_wt and _lexical_clean_path(stored_wt) != clean_wt:
-                        # Manifest worktree mismatch: untrusted manifest, abort processing it
-                        entries = []
-                    else:
-                        entries = raw_data["entries"]
-            elif isinstance(raw_data, list):
-                entries = raw_data
+        # Failures here are deliberately NOT swallowed: callers (e.g. WarmWorktreePool._reset_worktree)
+        # run `git clean -ffdx` afterwards and must not do so while a dependency junction may remain.
+        raw_data = json.loads(target_manifest.read_text(encoding="utf-8"))
+        entries: List[str] = []
+        if isinstance(raw_data, dict):
+            # Validate schema
+            if raw_data.get("version") == 1 and isinstance(raw_data.get("entries"), list):
+                stored_wt = raw_data.get("worktree")
+                if stored_wt and _lexical_clean_path(stored_wt) != clean_wt:
+                    # Manifest worktree mismatch: untrusted manifest, abort processing it
+                    entries = []
+                else:
+                    entries = raw_data["entries"]
+        elif isinstance(raw_data, list):
+            entries = raw_data
 
-            # Filter and strictly validate lexical containment of every entry
-            validated_entries: List[Path] = []
-            for entry_str in entries:
-                if not isinstance(entry_str, str):
-                    continue
-                p = Path(entry_str)
-                clean_p = _lexical_clean_path(p)
+        # Filter and strictly validate lexical containment of every entry
+        validated_entries: List[Path] = []
+        for entry_str in entries:
+            if not isinstance(entry_str, str):
+                continue
+            p = Path(entry_str)
+            clean_p = _lexical_clean_path(p)
 
-                # Strict lexical containment check: must be inside wt / node_modules
-                if not (clean_p == clean_nm or clean_nm in clean_p.parents):
-                    # Entry escapes provisioned dependency folder: ignore!
-                    continue
-                if clean_wt not in clean_p.parents:
-                    # Entry escapes worktree: ignore!
-                    continue
+            # Strict lexical containment check: must be inside wt / node_modules
+            if not (clean_p == clean_nm or clean_nm in clean_p.parents):
+                # Entry escapes provisioned dependency folder: ignore!
+                continue
+            if clean_wt not in clean_p.parents:
+                # Entry escapes worktree: ignore!
+                continue
 
-                # Verify no ancestor between clean_wt and p (exclusive) is a link escaping wt
-                cur_parent = _lexical_clean_path(p.parent)
-                has_escaping_ancestor = False
-                while cur_parent != clean_wt and cur_parent != cur_parent.parent:
-                    if is_reparse_or_link(cur_parent):
-                        # Symlink ancestor inside checkout (including clean_nm): reject
-                        has_escaping_ancestor = True
-                        break
-                    cur_parent = cur_parent.parent
-                if has_escaping_ancestor:
-                    continue
+            # Verify no ancestor between clean_wt and p (exclusive) is a link escaping wt
+            cur_parent = _lexical_clean_path(p.parent)
+            has_escaping_ancestor = False
+            while cur_parent != clean_wt and cur_parent != cur_parent.parent:
+                if is_reparse_or_link(cur_parent):
+                    # Symlink ancestor inside checkout (including clean_nm): reject
+                    has_escaping_ancestor = True
+                    break
+                cur_parent = cur_parent.parent
+            if has_escaping_ancestor:
+                continue
 
-                if is_reparse_or_link(p) or p.exists():
-                    validated_entries.append(p)
+            if is_reparse_or_link(p) or p.exists():
+                validated_entries.append(p)
 
-            # Remove deepest paths first
-            validated_entries.sort(key=lambda p: len(p.parts), reverse=True)
-            for p in validated_entries:
+        # Remove deepest paths first
+        validated_entries.sort(key=lambda p: len(p.parts), reverse=True)
+        for p in validated_entries:
+            clean_p = _lexical_clean_path(p)
+            # Recheck containment immediately before removal
+            if not (clean_p == clean_nm or clean_nm in clean_p.parents):
+                continue
+            if clean_wt not in clean_p.parents:
+                continue
+            cur_parent = _lexical_clean_path(p.parent)
+            has_linked_ancestor = False
+            while cur_parent != clean_wt and cur_parent != cur_parent.parent:
+                if is_reparse_or_link(cur_parent):
+                    has_linked_ancestor = True
+                    break
+                cur_parent = cur_parent.parent
+            if has_linked_ancestor:
+                continue
+
+            if is_reparse_or_link(p):
+                if os.name == "nt" and os.path.isdir(str(p)):
+                    try:
+                        os.rmdir(str(p))
+                    except OSError:
+                        subprocess.run(["cmd.exe", "/c", "rmdir", str(p)], capture_output=True)
+                else:
+                    p.unlink(missing_ok=True)
+                # A link that is still present means the removal failed: never continue.
+                if is_reparse_or_link(p):
+                    raise OSError(f"Failed to remove dependency link {p}; refusing to continue teardown")
+            elif p.is_file():
+                p.unlink(missing_ok=True)
+            elif p.is_dir():
+                # Real (non-link) directory: only removable when empty. A non-empty one holds
+                # ordinary files and no remaining manifest links (deepest entries went first).
                 try:
-                    clean_p = _lexical_clean_path(p)
-                    # Recheck containment immediately before removal
-                    if not (clean_p == clean_nm or clean_nm in clean_p.parents):
-                        continue
-                    if clean_wt not in clean_p.parents:
-                        continue
-                    cur_parent = _lexical_clean_path(p.parent)
-                    has_linked_ancestor = False
-                    while cur_parent != clean_wt and cur_parent != cur_parent.parent:
-                        if is_reparse_or_link(cur_parent):
-                            has_linked_ancestor = True
-                            break
-                        cur_parent = cur_parent.parent
-                    if has_linked_ancestor:
-                        continue
-
+                    os.rmdir(str(p))
+                except OSError:
                     if is_reparse_or_link(p):
-                        if os.name == "nt" and os.path.isdir(str(p)):
-                            try:
-                                os.rmdir(str(p))
-                            except OSError:
-                                subprocess.run(["cmd.exe", "/c", "rmdir", str(p)], capture_output=True)
-                        else:
-                            p.unlink(missing_ok=True)
-                    elif p.is_file():
-                        p.unlink(missing_ok=True)
-                    elif p.is_dir():
-                        try:
-                            os.rmdir(str(p))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        raise
 
-            target_manifest.unlink(missing_ok=True)
-            return
-        except Exception:
-            pass
+        target_manifest.unlink(missing_ok=True)
+
+
+_DEP_STORES = frozenset({"node_modules", "site-packages"})
+
+
+def _link_sig(p: Path) -> Tuple[int, int]:
+    """
+    Compute a tagged length and CRC32 signature of a symlink or junction target path.
+    Falls back to lstat signature on non-symlink reparse points (OneDrive/cloud placeholders, dedup).
+    Tagged with 0x1_0000_0000 so the signature can never collide with (0, 0) or ordinary file tuples.
+    """
+    try:
+        tgt = os.readlink(p)
+        b = os.fsencode(tgt)
+        return (len(b), zlib.crc32(b) | 0x1_0000_0000)
+    except OSError:
+        try:
+            st = p.lstat()
+            return (-st.st_size - 2, st.st_mtime_ns)
+        except (OSError, ValueError):
+            return (-1, -1)
+
+
+def _is_volatile_dir(rel_parts: Tuple[str, ...], d: str) -> bool:
+    """
+    Identify volatile runtime directories (.cache, advisor execution logs) under dependency stores
+    that should be excluded from parent workspace mutation snapshots.
+    Excludes node_modules/.cache, node_modules/<pkg>/.cache, node_modules/@scope/<pkg>/.cache,
+    and logs inside triad or @exocortex/<pkg> under any dependency store.
+    """
+    dl = d.lower()
+    if dl not in (".cache", "logs"):
+        return False
+
+    # Find innermost dependency store in rel_parts
+    last_dep_idx = -1
+    for i, part in enumerate(rel_parts):
+        if part in _DEP_STORES:
+            last_dep_idx = i
+
+    if last_dep_idx == -1:
+        return False
+
+    rem = rel_parts[last_dep_idx + 1 :]
+    if dl == ".cache":
+        return len(rem) == 0 or len(rem) == 1 or (len(rem) == 2 and rem[0].startswith("@"))
+    if dl == "logs":
+        return rem == ("triad",) or (len(rem) == 2 and rem[0] == "@exocortex")
+    return False
 
 
 def capture_directory_snapshot(dir_path: Union[str, Path]) -> Optional[Dict[str, Tuple[int, int]]]:
     """
     Recursively snapshot a directory tree's files and subdirectories (size, mtime_ns),
     without following symlinks, to detect any in-place mutation deep within dependency stores.
+    Tracks real directory existence as (0, 0) while tracking link and junction targets by target path signature.
     Returns None if directory does not exist or is a reparse point / symlink.
     """
     p = Path(dir_path).resolve()
@@ -919,32 +994,89 @@ def capture_directory_snapshot(dir_path: Union[str, Path]) -> Optional[Dict[str,
         return None
 
     snapshot: Dict[str, Tuple[int, int]] = {}
+    walk_errors: List[str] = []
+
+    def _on_walk_error(err: OSError) -> None:
+        walk_errors.append(str(err.filename or err))
+
     try:
         try:
             st = p.stat(follow_symlinks=False)
-            snapshot["."] = (st.st_size, st.st_mtime_ns)
-        except Exception:
+            snapshot["."] = (0, 0) if stat.S_ISDIR(st.st_mode) else (st.st_size, st.st_mtime_ns)
+        except (OSError, ValueError):
             pass
 
-        for root, dirs, files in os.walk(p, followlinks=False):
-            rel_root = Path(root).relative_to(p)
-            for d in dirs:
-                full_d = Path(root) / d
+        for root, dirs, files in os.walk(p, followlinks=False, onerror=_on_walk_error):
+            parent_path = Path(root)
+            rel_root = parent_path.relative_to(p)
+            rel_parts = tuple(x.lower() for x in (p.name, *rel_root.parts))
+            dirs[:] = [d for d in dirs if not _is_volatile_dir(rel_parts, d)]
+            for d in list(dirs):
+                full_d = parent_path / d
                 try:
+                    is_link = is_reparse_or_link(full_d)
+                    if is_link and d in dirs:
+                        dirs.remove(d)
                     st = full_d.stat(follow_symlinks=False)
-                    snapshot[str(rel_root / d)] = (st.st_size, st.st_mtime_ns)
-                except Exception:
-                    pass
+                    snapshot[str(rel_root / d)] = (
+                        _link_sig(full_d) if is_link else (0, 0) if stat.S_ISDIR(st.st_mode) else (st.st_size, st.st_mtime_ns)
+                    )
+                except (OSError, ValueError):
+                    if d in dirs:
+                        dirs.remove(d)
             for f in files:
-                full_f = Path(root) / f
+                full_f = parent_path / f
                 try:
-                    st = full_f.stat(follow_symlinks=False)
-                    snapshot[str(rel_root / f)] = (st.st_size, st.st_mtime_ns)
-                except Exception:
+                    is_link = is_reparse_or_link(full_f)
+                    if is_link:
+                        snapshot[str(rel_root / f)] = _link_sig(full_f)
+                    else:
+                        st = full_f.stat(follow_symlinks=False)
+                        snapshot[str(rel_root / f)] = (st.st_size, st.st_mtime_ns)
+                except (OSError, ValueError):
                     pass
-    except Exception:
-        pass
+        for err_path in walk_errors:
+            try:
+                rel_err = str(Path(err_path).relative_to(p))
+            except Exception:
+                rel_err = Path(err_path).name or str(err_path)
+            snapshot[f"<walk-error>:{rel_err}"] = (-1, -1)
+    except (OSError, ValueError):
+        return {"<scan-failed>": (-1, -1)}
     return snapshot
+
+
+TRIAD_WORKTREE_DIR_PREFIX = "triad"
+
+
+def _triad_worktree_root() -> Path:
+    """Root under which create_worktree allocates default worktrees (the system temp dir)."""
+    return Path(tempfile.gettempdir()).resolve()
+
+
+def _is_managed_worktree_path(
+    wt_path: Path,
+    main_repo: Optional[Path],
+    env: Optional[Dict[str, str]] = None,
+) -> bool:
+    """
+    True if `wt_path` may be force-deleted: it is registered in `git worktree list --porcelain`
+    of the owning repo (this also covers a registered worktree whose earlier removal only
+    partially succeeded), or it lies under the triad worktree root in a `triad*` directory.
+    """
+    norm = os.path.normcase(str(wt_path))
+    if main_repo is not None and Path(main_repo).exists():
+        try:
+            for entry in list_worktrees(main_repo, env=env):
+                if os.path.normcase(str(entry["worktree"])) == norm:
+                    return True
+        except Exception:
+            pass
+    try:
+        rel = wt_path.relative_to(_triad_worktree_root())
+    except ValueError:
+        return False
+    return bool(rel.parts) and rel.parts[0].lower().startswith(TRIAD_WORKTREE_DIR_PREFIX)
 
 
 def remove_worktree(
@@ -979,6 +1111,17 @@ def remove_worktree(
         except Exception:
             main_repo = None
 
+    # Never destroy a main working tree / standalone repository (its .git is a directory),
+    # the registered main repo itself, or any ancestor of it. The rmtree fallback below would
+    # otherwise wipe the whole repository, including its object database.
+    if (wt_path / ".git").is_dir():
+        return False
+    if main_repo is not None:
+        main_resolved = Path(main_repo).resolve()
+        norm_wt = os.path.normcase(str(wt_path))
+        if any(os.path.normcase(str(p)) == norm_wt for p in (main_resolved, *main_resolved.parents)):
+            return False
+
     # Protect against locked CWD on Windows
     try:
         current_cwd = Path.cwd().resolve()
@@ -1008,6 +1151,12 @@ def remove_worktree(
             return True
         else:
             return False
+
+    # Force removal is destructive (rmtree fallback). Only act on directories git knows as a
+    # worktree of the owning repo, or that live under the triad worktree root. Anything else is
+    # refused untouched, so a mistyped/hostile path can never be wiped.
+    if wt_path.exists() and not _is_managed_worktree_path(wt_path, main_repo, env):
+        return False
 
     # Force removal: Safely deprovision external dependency links before unlinking or deleting worktree
     deprovision_worktree_dependencies(wt_path)
@@ -1137,8 +1286,9 @@ class WarmWorktreePool:
         self._pool_id = uuid.uuid4().hex[:8]
 
         # Determine exact commit SHA to reset to
+        reject_option_like_ref(base_commit, "base_commit")
         res = subprocess.run(
-            ["git", "-C", str(self.repo_root), "rev-parse", base_commit],
+            ["git", "-C", str(self.repo_root), "rev-parse", "--verify", "--end-of-options", base_commit],
             capture_output=True, text=True, encoding="utf-8", errors="replace", env=self.env
         )
         if res.returncode != 0 or not res.stdout.strip():

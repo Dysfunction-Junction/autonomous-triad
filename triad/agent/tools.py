@@ -269,7 +269,7 @@ class ToolRegistry:
         try:
             proc = subprocess.Popen(
                 command,
-                shell=True,  # nosec B602
+                shell=True,  # nosec B602 - user-confirmed local tool, not an untrusted benchmark patch
                 cwd=str(self.workspace_root),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,

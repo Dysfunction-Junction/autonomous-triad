@@ -11,7 +11,7 @@ References & Prior Art:
   Cooldown-aware fallback cascades with circuit breaking.
 
 3-Tier Waterfall:
-  Tier 1: Primary Frontier (Claude 3.7 Sonnet / Codex via Triad Bridge) [Paid Subscription Limit]
+  Tier 1: Primary Frontier (Claude Code / Codex via Triad Bridge) [Paid Subscription Limit]
   Tier 2: Cloud Free-Tier (Nous Research stepfun/step-3.7-flash:free) [Zero Cost Cloud]
   Tier 3: Local Hardware (llama-server :8080 qwen3 / qwen2.5-coder) [Zero Cost Local]
 """
@@ -28,7 +28,15 @@ except ImportError:
     from agent.tracker import RollingWindowTracker
 
 NOUS_AUTH_PATH = Path.home() / "AppData" / "Local" / "hermes" / "auth.json"
-LOCAL_LLAMA_URL = "http://127.0.0.1:8080/v1"
+
+
+def local_llama_v1_url() -> str:
+    """OpenAI-compatible base URL for the local llama-server."""
+    try:
+        from triad.paths import llama_cpp_url
+    except ImportError:
+        from paths import llama_cpp_url
+    return llama_cpp_url().rstrip("/") + "/v1"
 
 
 class ModelTier(str, Enum):
@@ -152,10 +160,10 @@ class ZeroCostRouter:
         if force_tier in ("primary", "pro", "heavy", "architect", "council"):
             return RoutingDecision(
                 selected_tier=ModelTier.TIER_1_PRIMARY,
-                model_name="claude-3-7-sonnet",
+                model_name="claude-code",
                 difficulty_score=1.0,
                 threshold_c=0.0,
-                reason="Delegated to Chief Architect (Claude 3.7 Sonnet / Codex)",
+                reason="Delegated to Chief Architect (Claude Code / Codex)",
                 fallback_chain=[ModelTier.TIER_2_CLOUD_FREE, ModelTier.TIER_3_LOCAL]
             )
         if force_tier in ("free", "nous"):

@@ -1,0 +1,10 @@
+{
+  "name": "@exocortex/triad",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Autonomous Triad Advisory Council & Ephemeral Worktree Risk Gating",
+  "scripts": {
+    "test": "python -m pytest triad/tests -q",
+    "typecheck": "echo 'Python package - typecheck skipped'"
+  }
+}

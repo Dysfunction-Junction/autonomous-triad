@@ -451,7 +451,7 @@ def sync_launchers(
     env_paths = [_norm_path_str(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
     result["path_ok"] = _norm_path_str(target_bin) in env_paths
 
-    launcher_names = ["triad.cmd", "triad.ps1", "triad"]
+    launcher_names = ["triad.cmd", "triad.ps1", "triad", "tr.cmd", "tr.ps1"]
     updated = []
 
     for name in launcher_names:

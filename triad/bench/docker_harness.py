@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Repo-native SWE-bench tests in Docker, using the local bare clone.
+"""Repo-native SWE-bench tests in a restricted Docker container.
 
 Django runs ``tests/runtests.py``. Astropy is a C-extension package, so it
-runs only when ``TRIAD_ASTROPY_IMAGE`` names a prebuilt image. If Docker or
-the clone is missing, callers keep the existing judge path.
+runs only when ``TRIAD_ASTROPY_IMAGE`` names a prebuilt image. Candidate
+patches are untrusted: they must never fall back to host execution.
 """
 
 from __future__ import annotations
@@ -16,6 +16,15 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
+
+
+DOCKER_SANDBOX_ARGS = [
+    "--network=none",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--memory", "4g",
+    "--pids-limit", "512",
+]
 
 
 def bare_repo_dirname(repo: str) -> str:
@@ -33,6 +42,32 @@ def resolve_bare_repo(repos_dir: Path, repo: str) -> Optional[Path]:
     legacy = repos_dir / legacy_name
     if legacy != primary and (legacy / "HEAD").exists():
         return legacy
+    return None
+
+
+def cleanup_timed_out_container(container: str) -> Optional[str]:
+    """Stop and confirm removal of a timed-out container; return an error if uncertain."""
+    errors = []
+    try:
+        killed = subprocess.run(["docker", "kill", container], capture_output=True, text=True, timeout=30)
+        if killed.returncode != 0:
+            errors.append((killed.stderr or killed.stdout or "docker kill failed").strip())
+        waited = subprocess.run(["docker", "wait", container], capture_output=True, text=True, timeout=30)
+        if waited.returncode != 0:
+            errors.append((waited.stderr or waited.stdout or "docker wait failed").strip())
+        else:
+            return None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        errors.append(str(exc))
+    if errors:
+        try:
+            removed = subprocess.run(["docker", "rm", "-f", container], capture_output=True, text=True, timeout=30)
+            if removed.returncode == 0:
+                return None
+            errors.append((removed.stderr or removed.stdout or "docker rm failed").strip())
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(str(exc))
+        return "; ".join(errors[-2:])
     return None
 
 
@@ -103,18 +138,20 @@ def runner_executed(returncode: int, output: str) -> bool:
     """True only when the test runner itself ran.
 
     Install failures, import errors, usage errors, and collection errors stay
-    false so the caller can keep the host pytest and judge path.
+    false so the caller can report that real test verification is unavailable;
+    candidate tests must never be run on the host as a fallback.
     """
     text = output or ""
     lower = text.lower()
     if returncode == 2:
         return False
-    if returncode == 0:
-        return True
     # unittest reports a missing module as one ``_FailedTest`` plus "Ran 1 test".
     if "_failedtest" in lower or "failed to import test module" in lower:
         return False
-    if re.search(r"\bran \d+ tests?\b", lower):
+    ran_tests = re.search(r"\bran\s+(\d+)\s+tests?\b", lower)
+    if ran_tests:
+        return int(ran_tests.group(1)) > 0
+    if re.search(r"\b[1-9]\d*\s+(?:passed|failed|errors?|skipped|xfailed|xpassed)\b", lower):
         return True
     harness = any(
         mark in lower
@@ -131,21 +168,25 @@ def runner_executed(returncode: int, output: str) -> bool:
     )
     if harness:
         return False
-    return "short test summary" in lower or bool(re.search(r"\b\d+ failed\b", lower))
+    return "short test summary" in lower or bool(re.search(r"\b[1-9]\d*\s+failed\b", lower))
 
 
 def docker_outcome(returncode: int, output: str) -> str:
-    """``pass`` only for a clean run. Skips and failures stay on the host path.
+    """Classify test outcomes without permitting host execution as a fallback.
 
     A bare ``python:3.11`` image can print ``OK (skipped=1)`` when a Django
     dependency is missing, and an old Django tree can fail on 3.11 for reasons
-    that are not the patch. Neither one is a score.
+    that are not the patch. Neither one is a passing score.
     """
-    if returncode != 0 or not runner_executed(returncode, output or ""):
-        return "fallback"
-    if re.search(r"skipped=\d+", output or "", re.IGNORECASE):
-        return "fallback"
-    return "pass"
+    if not runner_executed(returncode, output or ""):
+        return "unavailable"
+    if re.search(
+        r"(?:skipped\s*=\s*[1-9]\d*|\b[1-9]\d*\s+skipped\b)",
+        output or "",
+        re.IGNORECASE,
+    ):
+        return "incomplete"
+    return "pass" if returncode == 0 else "failed"
 
 
 def docker_is_running() -> bool:
@@ -162,11 +203,16 @@ def docker_is_running() -> bool:
     return probe.returncode == 0
 
 
+_HEX_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+
 def checkout_argv(checkout: Path, base_commit: str) -> List[str]:
-    """Detach at a commit. ``--detach`` stays an option; the commit is not one."""
+    """Detach at a commit. Validates the commit as a hex SHA so --end-of-options is not needed on Git < 2.44."""
+    if not _HEX_COMMIT_RE.match(base_commit):
+        raise ValueError(f"Invalid commit SHA: {base_commit!r}")
     return [
         "git", "-C", str(checkout), "checkout",
-        "--detach", "--end-of-options", base_commit, "--",
+        "--detach", base_commit, "--",
     ]
 
 
@@ -177,7 +223,7 @@ def _apply_patch(checkout: Path, patch_text: str) -> bool:
     patch_file.write_text(patch_text if patch_text.endswith("\n") else patch_text + "\n", encoding="utf-8")
     try:
         result = subprocess.run(
-            ["git", "-C", str(checkout), "apply", "--recount", str(patch_file)],
+            ["git", "-C", str(checkout), "apply", "--recount", "--", str(patch_file)],
             capture_output=True,
             timeout=60,
         )
@@ -250,7 +296,7 @@ def try_native_docker_tests(
             )
             cmd = [
                 "docker", "run", "--rm", "--name", container,
-                "--memory", "4g", "--pids-limit", "512",
+                *DOCKER_SANDBOX_ARGS,
                 "-v", _docker_bind(checkout),
                 "-w", "/src",
                 image,
@@ -259,7 +305,7 @@ def try_native_docker_tests(
         else:
             cmd = [
                 "docker", "run", "--rm", "--name", container,
-                "--memory", "4g", "--pids-limit", "512",
+                *DOCKER_SANDBOX_ARGS,
                 "-v", _docker_bind(checkout),
                 "-w", "/src",
                 image,
@@ -268,18 +314,31 @@ def try_native_docker_tests(
         try:
             ran = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            try:
-                subprocess.run(["docker", "kill", container], capture_output=True, timeout=30)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-            skipped["message"] = f"Docker test run timed out after {timeout}s; keeping the host path"
+            cleanup_error = cleanup_timed_out_container(container)
+            skipped.update(
+                executed=True,
+                method="DOCKER_TESTS_TIMEOUT",
+                message=(
+                    f"Docker test run timed out after {timeout}s; container cleanup failed: {cleanup_error}"
+                    if cleanup_error else
+                    f"Docker test run timed out after {timeout}s; container termination was confirmed; host execution is disabled"
+                ),
+            )
             return skipped
         except OSError as exc:
-            skipped["message"] = f"Docker could not start: {exc}"
+            skipped.update(
+                method="DOCKER_UNAVAILABLE",
+                message=f"Docker could not start: {exc}; host execution is disabled",
+            )
             return skipped
         output = f"{ran.stdout or ''}\n{ran.stderr or ''}"
-        if docker_outcome(ran.returncode, output) != "pass":
-            skipped["message"] = "Docker did not produce a clean pass; keeping the host path"
+        outcome = docker_outcome(ran.returncode, output)
+        if outcome != "pass":
+            skipped.update(
+                executed=outcome in ("failed", "incomplete"),
+                method=f"DOCKER_TESTS_{outcome.upper()}",
+                message=f"Docker tests did not produce a clean pass ({outcome}); host execution is disabled",
+            )
             return skipped
         return {
             "executed": True,
