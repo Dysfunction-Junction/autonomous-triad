@@ -291,7 +291,10 @@ _HIGH_SEVERITY_RE = re.compile(
     r"|^[\s>*_`#\-\d.)]*(?:BLOCKER|MAJOR)\b",
     re.IGNORECASE | re.MULTILINE,
 )
-_MINOR_NOTE_RE = re.compile(r".*\b(?:MINOR|NIT)\b.*", re.IGNORECASE)
+_MINOR_NOTE_RE = re.compile(
+    r"^.*(?:\[(?:MINOR|NIT)\]|\b(?:MINOR|NIT)\s*[:\-\u2013\u2014|]|^[\s>*_`#\-\d.)]*(?:MINOR|NIT)\b).*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _try_unanimous_approved_synthesis(resp1: str, resp2: str) -> Optional[str]:

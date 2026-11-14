@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from triad import competition as comp
@@ -73,6 +75,15 @@ class TestPrepareSynthesisEvidence(unittest.TestCase):
         self.assertIn("+    y = 2", diff_text)
         self.assertNotIn("+line 2999", diff_text)
 
+    def test_oversized_cited_hunk_is_capped_to_budget(self):
+        filler = "".join(f"+line {i}\n" for i in range(500))
+        big = (
+            "diff --git a/big.txt b/big.txt\n--- a/big.txt\n+++ b/big.txt\n@@ -1,0 +1,500 @@\n" + filler
+        )
+        diff_text, _ = prepare_synthesis_evidence(big, None, ["issue at big.txt:10"], diff_budget=300)
+        self.assertIn("diff truncated", diff_text)
+        self.assertLess(len(diff_text), 400)
+
     def test_diff_passed_as_context_is_not_lost(self):
         long_ctx = SAMPLE_DIFF + ("# pad\n" * 600)
         diff_text, ctx = prepare_synthesis_evidence(None, long_ctx, [])
@@ -121,8 +132,10 @@ class TestUnanimousShortcut(unittest.TestCase):
         self.assertIsNone(comp._try_unanimous_approved_synthesis("VERDICT: APPROVED\n- MAJOR race in a.py", self.OK2))
 
     def test_prose_mentions_do_not_block_shortcut(self):
-        prose = "VERDICT: APPROVED\nNo BLOCKER/MAJOR findings; no major issues."
-        self.assertIsNotNone(comp._try_unanimous_approved_synthesis(prose, self.OK2))
+        prose = "VERDICT: APPROVED\nNo BLOCKER/MAJOR findings; no major or minor issues."
+        res = comp._try_unanimous_approved_synthesis(prose, self.OK2)
+        self.assertIsNotNone(res)
+        self.assertIn("Minor notes: None", res)
 
     def test_late_or_conflicting_approval_does_not_count(self):
         late = "VERDICT: REJECTED\nafter fixes -> VERDICT: APPROVED"
@@ -139,11 +152,14 @@ class TestUnanimousShortcut(unittest.TestCase):
             calls.append((name, kwargs.get("mode")))
             return "VERDICT: APPROVED\nLooks good."
 
-        with patch.object(comp, "query_configured_advisor", side_effect=fake_query), \
-             patch.object(comp, "log_council_session", create=True):
-            res = comp.query_competition_council(
-                prompt="review", diff="+x", mode="review_diff", advisor_names=("mock", "mock")
-            )
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "council_sessions.jsonl"
+            with patch.object(comp, "query_configured_advisor", side_effect=fake_query), \
+                 patch.object(comp, "write_state_file", return_value=log_path):
+                res = comp.query_competition_council(
+                    prompt="review", diff="+x", mode="review_diff", advisor_names=("mock", "mock")
+                )
+            self.assertTrue(log_path.exists())
         self.assertEqual(len(calls), 2, f"judge should be skipped, got calls: {calls}")
         self.assertEqual(res["synthesis"].splitlines()[0], "VERDICT: APPROVED")
         self.assertIn("Unanimous", res["synthesis"])

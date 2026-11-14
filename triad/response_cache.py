@@ -17,7 +17,7 @@ except ImportError:
     from paths import state_dir
     from procutil import is_failed_advisor_response
 
-PROMPT_SCHEMA_VERSION = "1"
+PROMPT_SCHEMA_VERSION = "2"
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 STALE_TMP_SECONDS = 300

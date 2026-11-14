@@ -617,7 +617,13 @@ def prepare_synthesis_evidence(
         diff, context = context, None
     diff_text = ""
     if diff:
-        diff_text = diff if len(diff) <= diff_budget else extract_cited_hunks(diff, responses)
+        if len(diff) <= diff_budget:
+            diff_text = diff
+        else:
+            diff_text = extract_cited_hunks(diff, responses, plain_cap=diff_budget)
+            if len(diff_text) > diff_budget:
+                omitted = len(diff_text) - diff_budget
+                diff_text = diff_text[:diff_budget] + f"\n[... diff truncated, {omitted} chars omitted ...]"
     ctx_text = None
     if context:
         if len(context) <= context_budget:
