@@ -63,8 +63,17 @@ class TestTrivialDiffPreFilter(unittest.TestCase):
             "assets/diagram.svg",
             "requirements.txt",
             "CODEOWNERS",
+            "AGENT.md",
+            "CONVENTIONS.md",
+            "deploy.prompt.md",
         ):
             self.assertFalse(is_trivial_diff(DOCS_DIFF.replace("README.md", sensitive)), f"should reject {sensitive}")
+
+        secret_doc = DOCS_DIFF + "+OPENAI_API_KEY=sk-1234567890abcdef1234567890\n"
+        self.assertFalse(is_trivial_diff(secret_doc))
+
+        oversized_doc = DOCS_DIFF + ("+line\n" * 4000)
+        self.assertFalse(is_trivial_diff(oversized_doc))
 
         symlink_mod = (
             "diff --git a/docs/guide.md b/docs/guide.md\n"

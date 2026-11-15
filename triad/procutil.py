@@ -696,21 +696,33 @@ def extract_diff_file_paths(diff_text: Optional[str]) -> List[str]:
 
 
 _AGENT_INSTRUCTION_FILES = frozenset({
-    "claude.md", "claude.local.md", "agents.md", "gemini.md", "skill.md",
-    "soul.md", "tools.md", "memory.md", "copilot-instructions.md",
+    "claude.md", "claude.local.md", "agents.md", "agent.md", "gemini.md",
+    "skill.md", "soul.md", "tools.md", "memory.md", "copilot-instructions.md",
+    "hermes.md", ".hermes.md", "conventions.md", "identity.md", "user.md",
     ".cursorrules", ".windsurfrules", "llms.txt",
 })
+_AGENT_INSTRUCTION_SUFFIXES = (".prompt.md", ".instructions.md")
 _PROTECTED_DIR_PREFIXES = (
     ".claude/", ".agents/", ".github/", ".gemini/", ".codex/", ".cursor/",
     ".clinerules/", ".roo/", ".kiro/", ".windsurf/", ".continue/",
 )
 _TRIVIAL_DOC_EXTENSIONS = frozenset({".md", ".rst"})
 _INDEX_SPECIAL_MODE_RE = re.compile(r"^index [0-9a-f]+\.\.[0-9a-f]+ (?:120000|100755)$")
+TRIVIAL_DIFF_MAX_CHARS = 20_000
+_TRIVIAL_SECRET_RE = re.compile(
+    r"(?:sk-[A-Za-z0-9_-]{16,}"
+    r"|gh[pousr]_[A-Za-z0-9_]{20,}"
+    r"|AKIA[0-9A-Z]{16}"
+    r"|AIza[0-9A-Za-z_-]{30,}"
+    r"|xox[baprs]-[0-9A-Za-z-]{10,}"
+    r"|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"
+    r"|Bearer\s+[A-Za-z0-9._\-]{24,})"
+)
 
 
-def is_trivial_diff(diff_text: Optional[str]) -> bool:
-    """Return True only when every `diff --git` chunk touches non-instruction .md/.rst docs (no symlinks, executables, or metadata changes)."""
-    if not diff_text or not diff_text.strip():
+def is_trivial_diff(diff_text: Optional[str], *, max_chars: int = TRIVIAL_DIFF_MAX_CHARS) -> bool:
+    """Return True only when every `diff --git` chunk touches non-instruction .md/.rst docs within budget and without secrets or metadata changes."""
+    if not diff_text or not diff_text.strip() or len(diff_text) > max_chars:
         return False
     if re.search(r"(?m)^diff --(?:cc|combined) ", diff_text):
         return False
@@ -727,7 +739,8 @@ def is_trivial_diff(diff_text: Optional[str]) -> bool:
         fp = _extract_diff_file_path(lines)
         if not fp:
             return False
-        # Reject mode / executable / symlink / deletion / rename / copy / binary metadata changes
+        # Scan header lines up to the first @@ hunk for mode/symlink/deletion/rename/copy/binary metadata
+        header_end = next((i for i, ln in enumerate(lines[1:], 1) if ln.startswith("@@ ")), len(lines))
         if any(
             line.startswith((
                 "old mode ", "new mode ", "rename from ", "rename to ",
@@ -736,17 +749,27 @@ def is_trivial_diff(diff_text: Optional[str]) -> bool:
                 "Binary files ", "GIT binary patch",
             ))
             or _INDEX_SPECIAL_MODE_RE.match(line)
-            for line in lines[1:12]
+            for line in lines[1:header_end]
         ):
             return False
         norm = _LEADING_DOT_SLASH_RE.sub("", fp.replace("\\", "/")).lower()
         base = os.path.basename(norm)
-        if base in _AGENT_INSTRUCTION_FILES or any(f"/{p}" in f"/{norm}" for p in _PROTECTED_DIR_PREFIXES):
+        if (
+            base in _AGENT_INSTRUCTION_FILES
+            or base.endswith(_AGENT_INSTRUCTION_SUFFIXES)
+            or any(f"/{p}" in f"/{norm}" for p in _PROTECTED_DIR_PREFIXES)
+        ):
             return False
         _, ext = os.path.splitext(base)
         if ext not in _TRIVIAL_DOC_EXTENSIONS:
             return False
         if not is_doc_or_asset_file(fp):
+            return False
+        # Added lines must not contain obvious secret/credential patterns
+        if any(
+            ln.startswith("+") and not ln.startswith("+++ ") and _TRIVIAL_SECRET_RE.search(ln)
+            for ln in lines[header_end:]
+        ):
             return False
     return True
 

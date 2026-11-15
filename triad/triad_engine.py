@@ -552,13 +552,15 @@ def _classify_diff_with_llama(diff_content: str) -> Optional[str]:
         triage_prompt = (
             "Classify risk: TRIVIAL|NORMAL|HIGH. One word.\n"
             f"FILES: {files_str}\n"
-            f"DIFF:\n```diff\n{diff_content[:3600]}\n```"
+            f"DIFF:\n````diff\n{diff_content[:3600]}\n````"
         )
         resp = query_configured_advisor("llama", triage_prompt, mode="passthrough", timeout=15, track_circuit=False)
         text = (resp or "").strip()
         exact = re.match(r"^\s*(TRIVIAL|NORMAL|HIGH)\s*\.?\s*$", text, re.IGNORECASE)
         return exact.group(1).upper() if exact else None
-    except Exception:
+    except Exception as e:
+        if os.environ.get("TRIAD_DEBUG"):
+            print(f"[Triage Debug] llama classification skipped: {e}", file=sys.stderr)
         return None
 
 
