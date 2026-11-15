@@ -679,6 +679,78 @@ def prepare_synthesis_evidence(
     return diff_text, ctx_text
 
 
+def extract_diff_file_paths(diff_text: Optional[str]) -> List[str]:
+    """Return unique file paths touched by `diff --git` chunks in `diff_text`."""
+    if not diff_text:
+        return []
+    paths: List[str] = []
+    seen = set()
+    for chunk in re.split(r"(?m)(?=^diff --git )", diff_text):
+        if not chunk.startswith("diff --git "):
+            continue
+        fp = _extract_diff_file_path(chunk.splitlines())
+        if fp and fp not in seen:
+            seen.add(fp)
+            paths.append(fp)
+    return paths
+
+
+_AGENT_INSTRUCTION_FILES = frozenset({
+    "claude.md", "claude.local.md", "agents.md", "gemini.md", "skill.md",
+    "soul.md", "tools.md", "memory.md", "copilot-instructions.md",
+    ".cursorrules", ".windsurfrules", "llms.txt",
+})
+_PROTECTED_DIR_PREFIXES = (
+    ".claude/", ".agents/", ".github/", ".gemini/", ".codex/", ".cursor/",
+    ".clinerules/", ".roo/", ".kiro/", ".windsurf/", ".continue/",
+)
+_TRIVIAL_DOC_EXTENSIONS = frozenset({".md", ".rst"})
+_INDEX_SPECIAL_MODE_RE = re.compile(r"^index [0-9a-f]+\.\.[0-9a-f]+ (?:120000|100755)$")
+
+
+def is_trivial_diff(diff_text: Optional[str]) -> bool:
+    """Return True only when every `diff --git` chunk touches non-instruction .md/.rst docs (no symlinks, executables, or metadata changes)."""
+    if not diff_text or not diff_text.strip():
+        return False
+    if re.search(r"(?m)^diff --(?:cc|combined) ", diff_text):
+        return False
+
+    parts = re.split(r"(?m)(?=^diff --git )", diff_text)
+    if parts and not parts[0].startswith("diff --git "):
+        if re.search(r"(?m)^(?:---|\+\+\+|@@) ", parts[0]):
+            return False
+    chunks = [c for c in parts if c.startswith("diff --git ")]
+    if not chunks:
+        return False
+    for chunk in chunks:
+        lines = chunk.splitlines()
+        fp = _extract_diff_file_path(lines)
+        if not fp:
+            return False
+        # Reject mode / executable / symlink / deletion / rename / copy / binary metadata changes
+        if any(
+            line.startswith((
+                "old mode ", "new mode ", "rename from ", "rename to ",
+                "copy from ", "copy to ",
+                "new file mode 120", "new file mode 100755", "deleted file mode ",
+                "Binary files ", "GIT binary patch",
+            ))
+            or _INDEX_SPECIAL_MODE_RE.match(line)
+            for line in lines[1:12]
+        ):
+            return False
+        norm = _LEADING_DOT_SLASH_RE.sub("", fp.replace("\\", "/")).lower()
+        base = os.path.basename(norm)
+        if base in _AGENT_INSTRUCTION_FILES or any(f"/{p}" in f"/{norm}" for p in _PROTECTED_DIR_PREFIXES):
+            return False
+        _, ext = os.path.splitext(base)
+        if ext not in _TRIVIAL_DOC_EXTENSIONS:
+            return False
+        if not is_doc_or_asset_file(fp):
+            return False
+    return True
+
+
 __all__ = [
     "clean_git_env",
     "kill_process_tree",
@@ -699,4 +771,6 @@ __all__ = [
     "extract_cited_hunks",
     "prepare_synthesis_evidence",
     "is_approved_verdict",
+    "extract_diff_file_paths",
+    "is_trivial_diff",
 ]

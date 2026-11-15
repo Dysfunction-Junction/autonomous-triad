@@ -48,6 +48,7 @@ try:
     from triad.procutil import (
         kill_process_tree, is_port_open, classify_advisor_response,
         strip_diff_bloat, is_doc_or_asset_file,
+        is_trivial_diff, extract_diff_file_paths,
     )
     from triad.circuit import snapshot_circuits, is_circuit_open, reset_circuit
     from triad.advisor_manager import query_configured_advisor, get_advisors, advisor_is_ready
@@ -65,6 +66,7 @@ except ImportError:
     from procutil import (
         kill_process_tree, is_port_open, classify_advisor_response,
         strip_diff_bloat, is_doc_or_asset_file,
+        is_trivial_diff, extract_diff_file_paths,
     )
     from circuit import snapshot_circuits, is_circuit_open, reset_circuit
     from advisor_manager import query_configured_advisor, get_advisors, advisor_is_ready
@@ -531,6 +533,65 @@ def _handle_adversarial_session_result(session: Dict[str, Any]) -> None:
     print("\n✅ [Adversarial Arena] Passed adversarial audit (VERDICT: RESILIENT).")
 
 
+def _triage_enabled() -> bool:
+    return os.environ.get("TRIAD_TRIAGE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _classify_diff_with_llama(diff_content: str) -> Optional[str]:
+    """Ask local llama to classify diff risk (TRIVIAL|NORMAL|HIGH) when ready; return None if unavailable."""
+    try:
+        advisors = get_advisors(enabled_only=True)
+        llama_cfg = next((a for a in advisors if a.get("name") == "llama"), None)
+        if not llama_cfg:
+            return None
+        ready, _ = advisor_is_ready(llama_cfg)
+        if not ready:
+            return None
+        files = extract_diff_file_paths(diff_content)
+        files_str = ", ".join(files[:30]) or "<unknown>"
+        triage_prompt = (
+            "Classify risk: TRIVIAL|NORMAL|HIGH. One word.\n"
+            f"FILES: {files_str}\n"
+            f"DIFF:\n```diff\n{diff_content[:3600]}\n```"
+        )
+        resp = query_configured_advisor("llama", triage_prompt, mode="passthrough", timeout=15, track_circuit=False)
+        text = (resp or "").strip()
+        exact = re.match(r"^\s*(TRIVIAL|NORMAL|HIGH)\s*\.?\s*$", text, re.IGNORECASE)
+        return exact.group(1).upper() if exact else None
+    except Exception:
+        return None
+
+
+def _resolve_triage_route(
+    diff_content: str,
+    high_stakes: bool,
+    engine: str,
+    competition: bool,
+    *,
+    allow_downgrade: bool = True,
+) -> Tuple[Optional[str], str, bool]:
+    """Return (trivial_verdict, engine, competition) applying Phase 3.6 tiered escalation."""
+    # High-stakes escalation is independent of TRIAD_TRIAGE
+    if high_stakes and engine == "auto":
+        return None, engine, True
+    if not _triage_enabled() or engine != "auto" or competition:
+        return None, engine, competition
+    if is_trivial_diff(diff_content):
+        return "VERDICT: APPROVED (trivial: docs/format)", engine, False
+    risk = _classify_diff_with_llama(diff_content)
+    if risk == "HIGH":
+        return None, engine, True
+    if risk == "TRIVIAL" and allow_downgrade and len(diff_content) <= 3600:
+        try:
+            advisors = get_advisors(enabled_only=True)
+            nous_cfg = next((a for a in advisors if a.get("name") == "nous"), None)
+            if nous_cfg and advisor_is_ready(nous_cfg)[0]:
+                return None, "nous", False
+        except Exception:
+            pass
+    return None, engine, False
+
+
 def cmd_review(args, env: Optional[Dict[str, str]] = None):
     """Review git diff with the Advisory Council."""
     diff_file = getattr(args, "diff_file", "")
@@ -582,8 +643,10 @@ def cmd_review(args, env: Optional[Dict[str, str]] = None):
     if high_stakes and task in ("micro", "scraping", "browsing"):
         task = "coding"
     competition = getattr(args, "competition", False) or getattr(args, "adversarial", False)
-    if high_stakes and engine == "auto":
-        competition = True
+    trivial_verdict, engine, competition = _resolve_triage_route(diff_content, high_stakes, engine, competition)
+    if trivial_verdict is not None:
+        print(trivial_verdict)
+        return
     if competition:
         if engine == "mock":
             adv_pair: Optional[Tuple[str, str]] = ("mock", "mock")
@@ -4168,18 +4231,34 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
         if ret != 0 or not diff or not diff.strip():
             err_msg = err.strip() if err.strip() else "diff produced empty output despite different tree object IDs"
             raise RuntimeError(f"Failed to generate diff against baseline ({target_base[:10]} != {candidate_tree[:10]}): {err_msg}")
+        raw_diff = diff
         diff = strip_diff_bloat(diff)
     except Exception as e:
         print(f"\n❌ [Triad Gate BLOCKED] Failed to retrieve git diff: {e}", file=sys.stderr)
         sys.exit(1)
 
+    engine = getattr(args, "engine", "auto")
     competition = getattr(args, "competition", False)
-    if competition:
+    try:
+        from triad.intent_engine import is_high_stakes
+    except ImportError:
+        from intent_engine import is_high_stakes
+    try:
+        gate_high_stakes = is_high_stakes(diff)
+    except Exception:
+        gate_high_stakes = True
+    trivial_verdict, engine, competition = _resolve_triage_route(
+        raw_diff, gate_high_stakes, engine, competition, allow_downgrade=False
+    )
+    if trivial_verdict is not None:
+        resp = trivial_verdict
+        competition = False
+    elif competition:
         try:
             from triad.competition import query_competition_council
         except ImportError:
             from competition import query_competition_council
-        adv_pair = ("mock", "mock") if getattr(args, "engine", "auto") == "mock" else ("claude", "codex")
+        adv_pair = ("mock", "mock") if engine == "mock" else ("claude", "codex")
         session = query_competition_council(
             _gate_signoff_prompt(diff, first_line=False)
             + "\nUnder Section 4 (Final Adjudicated Verdict & Action Plan), explicitly state either 'VERDICT: APPROVED' or 'VERDICT: REJECTED'.",
@@ -4194,7 +4273,7 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
             _gate_signoff_prompt(diff),
             diff=diff,
             mode="review_diff",
-            engine=getattr(args, "engine", "auto"),
+            engine=engine,
             timeout=getattr(args, "timeout", 240)
         )
     print("\n[Advisory Council Signoff]:")
