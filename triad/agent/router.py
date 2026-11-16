@@ -16,6 +16,7 @@ References & Prior Art:
   Tier 3: Local Hardware (llama-server :8080 qwen3 / qwen2.5-coder) [Zero Cost Local]
 """
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -28,6 +29,7 @@ except ImportError:
     from agent.tracker import RollingWindowTracker
 
 NOUS_AUTH_PATH = Path.home() / "AppData" / "Local" / "hermes" / "auth.json"
+DEFAULT_NOUS_MODEL = os.environ.get("TRIAD_NOUS_MODEL", "deepseek/deepseek-v4-flash-0731")
 
 
 def local_llama_v1_url() -> str:
@@ -169,7 +171,7 @@ class ZeroCostRouter:
         if force_tier in ("free", "nous"):
             return RoutingDecision(
                 selected_tier=ModelTier.TIER_2_CLOUD_FREE,
-                model_name="stepfun/step-3.7-flash:free",
+                model_name=DEFAULT_NOUS_MODEL,
                 difficulty_score=0.0,
                 threshold_c=1.0,
                 reason="Explicit user override: --free / --nous",
@@ -199,15 +201,25 @@ class ZeroCostRouter:
         if budget:
             return RoutingDecision(
                 selected_tier=ModelTier.TIER_2_CLOUD_FREE,
-                model_name="stepfun/step-3.7-flash:free",
+                model_name=DEFAULT_NOUS_MODEL,
                 difficulty_score=round(difficulty, 3),
                 threshold_c=round(threshold_c, 3),
                 reason=f"Skipped local tier: {budget}",
                 fallback_chain=[],
             )
 
-        # Default: Triad handles conversation & routine tasks locally.
+        # Default: Triad handles conversation & routine tasks locally unless :8080 is cooling down.
         # Chief Architect (Claude) is reserved for big decisions, explicit delegation, or consult_architect tool.
+        if self.tracker.is_cooling_down("llama_local"):
+            return RoutingDecision(
+                selected_tier=ModelTier.TIER_2_CLOUD_FREE,
+                model_name=DEFAULT_NOUS_MODEL,
+                difficulty_score=round(difficulty, 3),
+                threshold_c=round(threshold_c, 3),
+                reason="Local llama-server (:8080) cooling down; routed directly to Nous.",
+                fallback_chain=[]
+            )
+
         return RoutingDecision(
             selected_tier=ModelTier.TIER_3_LOCAL,
             model_name="qwen3:1.7b",

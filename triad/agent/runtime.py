@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Callable
 
 try:
-    from triad.agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, local_llama_v1_url
+    from triad.agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, DEFAULT_NOUS_MODEL, local_llama_v1_url
     from triad.agent.tools import ToolRegistry
     from triad.agent.tracker import RollingWindowTracker
 except ImportError:
-    from agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, local_llama_v1_url
+    from agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, DEFAULT_NOUS_MODEL, local_llama_v1_url
     from agent.tools import ToolRegistry
     from agent.tracker import RollingWindowTracker
 
@@ -88,13 +88,26 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
 """
 
     def _get_nous_api_key(self) -> Optional[str]:
+        env_key = os.environ.get("NOUS_API_KEY")
+        if isinstance(env_key, str) and env_key.strip():
+            return env_key.strip()
         if NOUS_AUTH_PATH.exists():
             try:
                 data = json.loads(NOUS_AUTH_PATH.read_text(encoding="utf-8"))
-                return data.get("api_key") or data.get("access_token") or data.get("token")
+                providers = data.get("providers")
+                nous_auth = providers.get("nous") if isinstance(providers, dict) else None
+                if isinstance(nous_auth, dict):
+                    for key_name in ("agent_key", "access_token", "api_key"):
+                        token = nous_auth.get(key_name)
+                        if isinstance(token, str) and token.strip():
+                            return token.strip()
+                for key_name in ("api_key", "access_token", "token"):
+                    token = data.get(key_name)
+                    if isinstance(token, str) and token.strip():
+                        return token.strip()
             except Exception:
                 pass
-        return os.environ.get("NOUS_API_KEY")
+        return None
 
     def _call_http_openai_compatible(
         self,
@@ -113,7 +126,7 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
             "temperature": 0.2,
             "max_tokens": max_tokens,
         }
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "User-Agent": "triad-agent"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
@@ -193,14 +206,19 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
 
                 elif tier == ModelTier.TIER_2_CLOUD_FREE:
                     key = self._get_nous_api_key()
+                    nous_model = (
+                        decision.model_name
+                        if decision.selected_tier == ModelTier.TIER_2_CLOUD_FREE and decision.model_name
+                        else DEFAULT_NOUS_MODEL
+                    )
                     text = self._call_http_openai_compatible(
                         base_url="https://inference-api.nousresearch.com/v1",
-                        model="stepfun/step-3.7-flash:free",
+                        model=nous_model,
                         messages=messages,
                         api_key=key,
                         timeout=90
                     )
-                    self.tracker.record_request(provider="nous_free", model="stepfun/step-3.7-flash:free")
+                    self.tracker.record_request(provider="nous_free", model=nous_model)
                     return text, tier
 
                 elif tier == ModelTier.TIER_3_LOCAL:
@@ -234,6 +252,10 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                     self.tracker.mark_circuit_break("primary", cooldown_seconds=600)
                 elif tier == ModelTier.TIER_2_CLOUD_FREE and ("429" in err_msg or "rate limit" in err_msg.lower()):
                     self.tracker.mark_circuit_break("nous_free", cooldown_seconds=300)
+                elif tier == ModelTier.TIER_3_LOCAL and any(
+                    tok in err_msg.lower() for tok in ("10061", "connection refused", "urlopen error", "timed out")
+                ):
+                    self.tracker.mark_circuit_break("llama_local", cooldown_seconds=120)
 
         # If everything failed
         raise RuntimeError(f"All waterfall tiers exhausted. Last error: {last_error}")

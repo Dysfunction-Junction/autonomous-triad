@@ -180,3 +180,49 @@ def test_consult_architect_secret_filter():
         res = tools.consult_architect("Review this key: sk-ant-api03-12345678901234567890")
         assert "error" in res
         assert "Security restriction" in res["error"]
+
+
+def test_nous_auth_nested_providers_schema(monkeypatch):
+    import json
+    import triad.agent.runtime as rt
+    from triad.agent.router import DEFAULT_NOUS_MODEL
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        auth_file = Path(tmpdir) / "auth.json"
+        auth_file.write_text(
+            json.dumps({
+                "version": 2,
+                "active_provider": "nous",
+                "providers": {
+                    "nous": {
+                        "agent_key": "sk-nous-agent-test",
+                        "access_token": "tok-fallback",
+                    }
+                },
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("NOUS_API_KEY", raising=False)
+        monkeypatch.setattr(rt, "NOUS_AUTH_PATH", auth_file)
+        monkeypatch.setattr(rt, "DEFAULT_SESSION_DIR", Path(tmpdir) / "sessions")
+
+        runtime = rt.AgentRuntime(workspace_root=Path(tmpdir))
+        assert runtime._get_nous_api_key() == "sk-nous-agent-test"
+
+        dec = runtime.router.select_route("hello", force_tier="nous")
+        assert dec.selected_tier == ModelTier.TIER_2_CLOUD_FREE
+        assert dec.model_name == DEFAULT_NOUS_MODEL
+
+
+def test_router_skips_cooling_down_local_tier():
+    from triad.agent.router import DEFAULT_NOUS_MODEL
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tracker = RollingWindowTracker(ledger_path=Path(tmpdir) / "ledger.json")
+        router = ZeroCostRouter(tracker=tracker)
+
+        tracker.mark_circuit_break("llama_local", cooldown_seconds=120)
+        dec = router.select_route("Write a python script to parse CSV")
+        assert dec.selected_tier == ModelTier.TIER_2_CLOUD_FREE
+        assert dec.model_name == DEFAULT_NOUS_MODEL
+        assert dec.fallback_chain == []

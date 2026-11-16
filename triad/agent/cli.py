@@ -122,7 +122,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--free", "--nous",
         dest="force_free",
         action="store_true",
-        help="Force cloud free tier (stepfun/step-3.7-flash:free)."
+        help="Force Nous Research cloud tier (default: deepseek/deepseek-v4-flash-0731)."
     )
     parser.add_argument(
         "--local", "--fast",
