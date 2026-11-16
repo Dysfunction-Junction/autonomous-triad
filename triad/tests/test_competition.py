@@ -258,6 +258,47 @@ class TestCompetitionMode(unittest.TestCase):
             self.assertEqual(res.get("status"), "degraded")
             self.assertFalse(res.get("quorum_met"))
 
+    def test_phase42_brief_condenser_and_nous_tiebreaker(self):
+        from unittest.mock import patch
+        from triad.competition import _maybe_condense_brief, _maybe_nous_tiebreaker
+
+        # Below threshold: returns original context without calling antigravity
+        with patch("triad.competition.query_configured_advisor") as q:
+            self.assertEqual(_maybe_condense_brief("p", "small ctx", "small diff", 30), "small ctx")
+            q.assert_not_called()
+
+        # Above threshold: invokes antigravity in mode='brief' when reserve is preserved
+        with patch.dict("os.environ", {"TRIAD_BRIEF_THRESHOLD": "1000"}):
+            with patch("triad.competition._advisor_ready_by_name", return_value=True):
+                with patch("triad.competition.query_configured_advisor", return_value="Condensed brief") as q:
+                    out = _maybe_condense_brief("p", "x" * 1200, "", 90)
+                    self.assertIn("Condensed brief", out)
+                    self.assertEqual(q.call_args.kwargs.get("mode"), "brief")
+
+                # Error from antigravity falls back to original context
+                with patch("triad.competition.query_configured_advisor", return_value="[Error: timeout]"):
+                    self.assertEqual(_maybe_condense_brief("p", "orig", "y" * 1200, 90), "orig")
+
+                # Low remaining budget skips condensation to preserve competition reserve
+                with patch("triad.competition.query_configured_advisor") as q_skip:
+                    self.assertEqual(_maybe_condense_brief("p", "orig", "y" * 1200, 30), "orig")
+                    q_skip.assert_not_called()
+
+        # Tiebreaker: skips when no BLOCKER contradiction
+        with patch("triad.competition.query_configured_advisor") as q:
+            no_blocker = "### 3. Direct Contradictions\nNone\nVERDICT: APPROVED"
+            self.assertEqual(_maybe_nous_tiebreaker(no_blocker, "", "claude", 30), no_blocker)
+            q.assert_not_called()
+
+        # Tiebreaker: invokes nous on BLOCKER Direct Contradictions
+        with patch("triad.competition._advisor_ready_by_name", return_value=True):
+            with patch("triad.competition.query_configured_advisor", return_value="Use option A") as q:
+                synth = "### 3. Direct Contradictions\nBLOCKER: Claude vs Codex on lock\n### 4. Verdict\nVERDICT: REJECTED"
+                res = _maybe_nous_tiebreaker(synth, "", "claude", 30)
+                self.assertIn("### Tiebreaker (Nous)", res)
+                self.assertIn("Use option A", res)
+                self.assertEqual(q.call_args.args[0], "nous")
+
 
 if __name__ == "__main__":
     unittest.main()

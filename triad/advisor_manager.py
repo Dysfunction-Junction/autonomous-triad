@@ -1171,6 +1171,32 @@ def query_configured_advisor(
         advisors = rank_advisors_for_task(advisors, task=task)
         advisors = [adv for adv in advisors if not is_interactive_advisor(adv)]
 
+        # Phase 5.2: Probe readiness concurrently for all eligible candidates before dispatch.
+        candidates_to_probe = []
+        for adv in advisors:
+            name = str(adv.get("name") or "unknown")
+            if dispatch_allowed(adv) and not is_circuit_open(name):
+                candidates_to_probe.append(adv)
+
+        ready_map: Dict[str, Tuple[bool, str]] = {}
+        if len(candidates_to_probe) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            pool = ThreadPoolExecutor(max_workers=min(len(candidates_to_probe), 6))
+            try:
+                futs = {str(a.get("name") or "unknown"): pool.submit(advisor_is_ready, a) for a in candidates_to_probe}
+                deadline = time.monotonic() + 1.5
+                for cname, fut in futs.items():
+                    rem = max(0.05, deadline - time.monotonic())
+                    try:
+                        ready_map[cname] = fut.result(timeout=rem)
+                    except Exception as exc:
+                        ready_map[cname] = (False, f"readiness probe error: {exc}")
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+        elif len(candidates_to_probe) == 1:
+            cname = str(candidates_to_probe[0].get("name") or "unknown")
+            ready_map[cname] = advisor_is_ready(candidates_to_probe[0])
+
         fail_notes = []
         skipped = []
         for adv in advisors:
@@ -1185,7 +1211,7 @@ def query_configured_advisor(
                 skipped.append(f"{name}: circuit open ({reason}, {rem}s left)")
                 print(f"[Triad Circuit] Skipping {name} (open: {reason}, {rem}s remaining)", file=sys.stderr)
                 continue
-            ready, why = advisor_is_ready(adv)
+            ready, why = ready_map.get(name) or advisor_is_ready(adv)
             if not ready:
                 skipped.append(f"{name}: {why}")
                 print(f"[Triad Ready] Skipping {name} ({why})", file=sys.stderr)

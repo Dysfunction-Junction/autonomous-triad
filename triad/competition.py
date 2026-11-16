@@ -45,6 +45,79 @@ DEFAULT_ADVISOR_PAIR: Tuple[str, str] = ("claude", "codex")
 DEFAULT_LABELS = {"claude": "Claude Code", "codex": "OpenAI Codex"}
 
 
+def _brief_threshold() -> int:
+    try:
+        return max(1000, int(os.environ.get("TRIAD_BRIEF_THRESHOLD", "30000")))
+    except ValueError:
+        return 30000
+
+
+def _advisor_ready_by_name(name: str) -> bool:
+    for adv in get_advisors():
+        if adv.get("name") == name:
+            if not dispatch_allowed(adv) or is_circuit_open(name):
+                return False
+            return advisor_is_ready(adv)[0]
+    return False
+
+
+def _maybe_condense_brief(prompt: str, context: Optional[str], diff: str, rem_timeout: int) -> Optional[str]:
+    """Phase 4.2: Use Antigravity (mode='brief') to condense oversized diff+context."""
+    total_len = len(diff or "") + len(context or "")
+    # Reserve at least 45s for the actual competition + synthesis steps.
+    if total_len <= _brief_threshold() or rem_timeout < 60:
+        return context
+    if not _advisor_ready_by_name("antigravity"):
+        return context
+    brief_prompt = (
+        "Condense the following diff/context into a <=2000-token engineering brief: "
+        "touched symbols, invariants, call sites, and key risks.\n\n"
+        f"Task: {prompt[:1000]}"
+    )
+    brief = query_configured_advisor(
+        "antigravity",
+        brief_prompt,
+        context=context,
+        diff=diff,
+        mode="brief",
+        timeout=min(30, rem_timeout - 45),
+    )
+    if is_failed_advisor_response(brief):
+        return context
+    return f"[Antigravity Context Brief]:\n{brief.strip()}"
+
+
+def _maybe_nous_tiebreaker(synthesis: str, diff: str, synth_engine: Optional[str], rem_timeout: int) -> str:
+    """Phase 4.2: Invoke Nous as tiebreaker only on BLOCKER Direct Contradictions."""
+    if not synthesis or synth_engine == "nous" or rem_timeout <= 5:
+        return synthesis
+    match = re.search(
+        r"(?:^|\n)###?\s*(?:3\.?\s*)?Direct Contradictions\b([\s\S]*?)(?:\n###?\s|\Z)",
+        synthesis,
+        re.IGNORECASE,
+    )
+    if not match:
+        return synthesis
+    contradictions = match.group(1).strip()
+    if not contradictions or contradictions.lower() in ("none", "none.", "n/a"):
+        return synthesis
+    if "BLOCKER" not in contradictions.upper():
+        return synthesis
+    if not _advisor_ready_by_name("nous"):
+        return synthesis
+
+    evidence, _ = prepare_synthesis_evidence(diff, None, [synthesis])
+    tie_prompt = (
+        "Resolve this BLOCKER contradiction concisely using only the cited evidence:\n\n"
+        f"--- DIRECT CONTRADICTIONS ---\n{contradictions[:3000]}\n\n"
+        f"{evidence}"
+    )
+    tie_resp = query_configured_advisor("nous", tie_prompt, mode="general", timeout=min(45, rem_timeout))
+    if is_failed_advisor_response(tie_resp):
+        return synthesis
+    return f"{synthesis.rstrip()}\n\n### Tiebreaker (Nous)\n{tie_resp.strip()}"
+
+
 def hash_content(text: str) -> str:
     """Generate a hash of diff or prompt for session correlation (non-security use)."""
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
@@ -388,6 +461,9 @@ def query_competition_council(
     if requested is not None and (adv1_name, adv2_name) != requested:
         print(f"[Triad Competition Mode] Requested pair {requested} not fully enabled; competing with ({adv1_name}, {adv2_name}).")
 
+    if not (adv1_name == "mock" and adv2_name == "mock"):
+        context = _maybe_condense_brief(prompt, context, diff, _rem_timeout())
+
     if adversarial:
         # Sequential Blue -> Red: Blue Team generates proposal/defense
         rem1 = _rem_timeout()
@@ -536,6 +612,8 @@ def query_competition_council(
                     other = adv2_name if adv1_name == synth_engine else adv1_name
                 if other != synth_engine:
                     synthesis = query_configured_advisor(other, synth_prompt, mode="general", timeout=synth_timeout)
+            if not is_failed_advisor_response(synthesis) and not (adv1_name == adv2_name == "mock"):
+                synthesis = _maybe_nous_tiebreaker(synthesis, diff, synth_engine, _rem_timeout())
 
     elapsed = time.time() - start_time
     is_synth_failed = is_failed_advisor_response(synthesis)
