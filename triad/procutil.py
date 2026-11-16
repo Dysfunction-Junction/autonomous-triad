@@ -125,7 +125,7 @@ def classify_advisor_response(text: Optional[str]) -> str:
     # earlier failures - that header must read as success, not as the failure it quotes.
     if tag.startswith("advisor auto-failover"):
         return "error" if "exhausted" in tag else "ok"
-    if any(k in tag for k in ("session limit", "rate limit", "usage limit")):
+    if any(k in tag for k in ("session limit", "rate limit", "usage limit", "weekly limit")):
         return "limit"
     if "triad circuit" in tag:
         return "limit" if any(k in tag for k in ("cooldown", "limit", "open")) else "error"

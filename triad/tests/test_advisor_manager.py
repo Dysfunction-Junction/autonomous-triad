@@ -111,7 +111,7 @@ class TestAdvisorManager(unittest.TestCase):
         """Verify live querying of Claude Code advisor."""
         resp = query_configured_advisor("claude", "Respond with OK", timeout=30)
         self.assertTrue(
-            "OK" in resp or "session limit" in resp.lower() or "rate limit" in resp.lower(),
+            "OK" in resp or "session limit" in resp.lower() or "rate limit" in resp.lower() or "weekly limit" in resp.lower(),
             f"Unexpected response from Claude Code: {resp}"
         )
 

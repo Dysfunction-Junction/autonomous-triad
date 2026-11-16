@@ -67,7 +67,7 @@ _LEGACY_CALL_LOGS = (
     Path.home() / ".agents" / "triad" / "logs" / "advisor_calls.jsonl",
 )
 
-LIMIT_MARKERS = ("session limit", "rate limit", "usage limit")
+LIMIT_MARKERS = ("session limit", "rate limit", "usage limit", "weekly limit")
 TEST_ROLES = frozenset({"test", "mock"})
 
 _STRENGTH_WARNED: set = set()
