@@ -6332,6 +6332,8 @@ def cmd_agent(args):
         argv.append("--free")
     if getattr(args, "force_local", False):
         argv.append("--local")
+    if getattr(args, "model", None):
+        argv.extend(["--model", args.model])
 
     sys.exit(agent_cli_main(argv))
 
@@ -6499,8 +6501,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent.add_argument("-c", "--continue", dest="resume", action="store_true", help="Resume most recent conversation session")
     p_agent.add_argument("-y", "--auto", "--dangerously-skip-permissions", dest="auto_approve", action="store_true", help="Auto-approve tool modifications")
     p_agent.add_argument("--heavy", "--pro", dest="force_heavy", action="store_true", help="Force high-tier primary model (Claude 3.7 Sonnet / Codex)")
-    p_agent.add_argument("--free", "--nous", dest="force_free", action="store_true", help="Force cloud free tier (stepfun:free)")
+    p_agent.add_argument("--free", "--nous", dest="force_free", action="store_true", help="Force Nous Research cloud tier")
     p_agent.add_argument("--local", "--fast", dest="force_local", action="store_true", help="Force local llama-server (:8080)")
+    p_agent.add_argument("--model", dest="model", type=str, default=None, help="Override Nous cloud model ID")
 
     return parser
 

@@ -226,3 +226,60 @@ def test_router_skips_cooling_down_local_tier():
         assert dec.selected_tier == ModelTier.TIER_2_CLOUD_FREE
         assert dec.model_name == DEFAULT_NOUS_MODEL
         assert dec.fallback_chain == []
+
+
+def test_parse_nested_tool_call_and_null_args():
+    from triad.agent.runtime import AgentRuntime
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        runtime = AgentRuntime(workspace_root=Path(tmpdir))
+        reply = (
+            "Let me read that file.\n"
+            "```tool_call\n"
+            "{\n"
+            '  "name": "read_file",\n'
+            '  "arguments": {\n'
+            '    "path": "nested/file.py",\n'
+            '    "start_line": 1\n'
+            "  }\n"
+            "}\n"
+            "```\n"
+            "Extra trailing text with } brace."
+        )
+        parsed = runtime._parse_tool_call(reply)
+        assert parsed is not None
+        assert parsed["name"] == "read_file"
+        assert parsed["arguments"]["path"] == "nested/file.py"
+
+        # Null arguments should not crash _execute_tool with TypeError
+        out = runtime._execute_tool({"name": "list_dir", "arguments": None})
+        assert "error" not in out.lower() or "count" in out.lower()
+
+
+def test_runtime_model_override_and_usage_recording(monkeypatch):
+    import triad.agent.runtime as rt
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setattr(rt, "DEFAULT_SESSION_DIR", Path(tmpdir) / "sessions")
+        tracker = RollingWindowTracker(ledger_path=Path(tmpdir) / "ledger.json")
+        runtime = rt.AgentRuntime(
+            workspace_root=Path(tmpdir),
+            router=ZeroCostRouter(tracker=tracker),
+            model_override="deepseek/deepseek-v4-pro",
+        )
+        monkeypatch.setattr(runtime, "_get_nous_api_key", lambda: "sk-test")
+
+        seen = {}
+
+        def fake_http(base_url, model, messages, api_key=None, timeout=120, max_tokens=2048, loopback=False):
+            seen["model"] = model
+            runtime._last_usage = (120, 30)
+            return "OK"
+
+        monkeypatch.setattr(runtime, "_call_http_openai_compatible", fake_http)
+        reply = runtime.run_turn("ping", force_tier="nous")
+        assert reply == "OK"
+        assert seen["model"] == "deepseek/deepseek-v4-pro"
+        stats = tracker.get_window_stats(provider="nous_free")
+        assert stats["total_turns"] == 1
+        assert stats["total_tokens"] == 150

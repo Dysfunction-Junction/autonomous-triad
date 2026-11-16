@@ -37,14 +37,16 @@ class AgentRuntime:
         workspace_root: Optional[Path] = None,
         auto_approve: bool = False,
         router: Optional[ZeroCostRouter] = None,
-        max_turns: int = 25
+        max_turns: int = 25,
+        model_override: Optional[str] = None,
     ):
         self.workspace_root = Path(workspace_root or Path.cwd()).resolve()
         self.auto_approve = auto_approve
         self.tools = ToolRegistry(workspace_root=self.workspace_root, auto_approve=self.auto_approve)
-        self.tracker = RollingWindowTracker()
+        self.tracker = router.tracker if router is not None else RollingWindowTracker()
         self.router = router or ZeroCostRouter(tracker=self.tracker)
         self.max_turns = max_turns
+        self.model_override = model_override.strip() if isinstance(model_override, str) and model_override.strip() else None
         self.session_id = f"session_{int(time.time())}"
         self.history: List[Dict[str, str]] = []
         self._turn_active: bool = False
@@ -154,6 +156,11 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
         reasoning = msg.get("reasoning_content") or ""
         if not content and reasoning:
             content = f"[Model Thought]:\n{reasoning}"
+        usage = data.get("usage") or {}
+        self._last_usage = (
+            int(usage.get("prompt_tokens") or 0),
+            int(usage.get("completion_tokens") or 0),
+        )
         return content
 
     def _call_tier_primary(self, messages: List[Dict[str, str]]) -> str:
@@ -207,10 +214,14 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                 elif tier == ModelTier.TIER_2_CLOUD_FREE:
                     key = self._get_nous_api_key()
                     nous_model = (
-                        decision.model_name
-                        if decision.selected_tier == ModelTier.TIER_2_CLOUD_FREE and decision.model_name
-                        else DEFAULT_NOUS_MODEL
+                        self.model_override
+                        or (
+                            decision.model_name
+                            if decision.selected_tier == ModelTier.TIER_2_CLOUD_FREE and decision.model_name
+                            else DEFAULT_NOUS_MODEL
+                        )
                     )
+                    self._last_usage = (0, 0)
                     text = self._call_http_openai_compatible(
                         base_url="https://inference-api.nousresearch.com/v1",
                         model=nous_model,
@@ -218,7 +229,13 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                         api_key=key,
                         timeout=90
                     )
-                    self.tracker.record_request(provider="nous_free", model=nous_model)
+                    ptok, ctok = getattr(self, "_last_usage", (0, 0))
+                    self.tracker.record_request(
+                        provider="nous_free",
+                        model=nous_model,
+                        prompt_tokens=ptok,
+                        completion_tokens=ctok,
+                    )
                     return text, tier
 
                 elif tier == ModelTier.TIER_3_LOCAL:
@@ -231,6 +248,7 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                     if budget:
                         decision.reason = budget
                         raise RuntimeError(budget)
+                    self._last_usage = (0, 0)
                     text = self._call_http_openai_compatible(
                         base_url=local_llama_v1_url(),
                         model="default",
@@ -239,7 +257,13 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                         max_tokens=1024,
                         loopback=True,
                     )
-                    self.tracker.record_request(provider="llama_local", model="qwen3:1.7b")
+                    ptok, ctok = getattr(self, "_last_usage", (0, 0))
+                    self.tracker.record_request(
+                        provider="llama_local",
+                        model="qwen3:1.7b",
+                        prompt_tokens=ptok,
+                        completion_tokens=ctok,
+                    )
                     return text, tier
 
             except Exception as exc:
@@ -264,21 +288,24 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
         """Extracts JSON tool call block from model response."""
         if text.startswith("[Model Thought]:"):
             return None
-        pattern = r"```(?:tool_call|json)?\s*(\{[\s\S]*?\})\s*```"
-        match = re.search(pattern, text)
-        if match:
+        for match in re.finditer(r"```(?:(?:tool_call|json)\b)?\s*([\s\S]*?)\s*```", text):
+            block = match.group(1).strip()
+            if not block.startswith("{"):
+                continue
             try:
-                data = json.loads(match.group(1))
-                if "name" in data:
+                data = json.loads(block)
+                if isinstance(data, dict) and isinstance(data.get("name"), str) and data["name"]:
                     return data
             except Exception:
-                pass
+                continue
         return None
 
     def _execute_tool(self, tool_call: Dict[str, Any]) -> str:
         """Routes tool call to ToolRegistry."""
         name = tool_call.get("name")
-        args = tool_call.get("arguments", {})
+        args = tool_call.get("arguments")
+        if not isinstance(args, dict):
+            args = {}
 
         method = getattr(self.tools, name, None)
         if not method or not callable(method):
@@ -329,6 +356,11 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
                     messages=self.history,
                     on_status=on_status
                 )
+                if active_tier != decision.selected_tier:
+                    if active_tier in decision.fallback_chain:
+                        idx = decision.fallback_chain.index(active_tier)
+                        decision.fallback_chain = decision.fallback_chain[idx + 1:]
+                    decision.selected_tier = active_tier
 
                 # Check for tool call
                 tool_call = self._parse_tool_call(assistant_reply)

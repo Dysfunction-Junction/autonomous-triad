@@ -15,10 +15,10 @@ import urllib.request
 
 try:
     from triad.agent.runtime import AgentRuntime
-    from triad.agent.router import local_llama_v1_url
+    from triad.agent.router import local_llama_v1_url, DEFAULT_NOUS_MODEL
 except ImportError:
     from agent.runtime import AgentRuntime
-    from agent.router import local_llama_v1_url
+    from agent.router import local_llama_v1_url, DEFAULT_NOUS_MODEL
 
 
 def read_piped_stdin() -> str:
@@ -66,6 +66,12 @@ def print_status(runtime: AgentRuntime):
     turns = stats.get("total_turns", 0)
     tokens = stats.get("total_tokens", 0)
     cooling = stats.get("is_cooling_down", False)
+    nous_stats = runtime.tracker.get_window_stats(provider="nous_free")
+    nous_turns = nous_stats.get("total_turns", 0)
+    nous_tokens = nous_stats.get("total_tokens", 0)
+    local_cooling = runtime.tracker.is_cooling_down("llama_local")
+    nous_ready = "READY" if runtime._get_nous_api_key() else "MISSING AUTH"
+    active_nous_model = runtime.model_override or DEFAULT_NOUS_MODEL
     thresh, reason = runtime.router.get_effective_threshold()
 
     # Probe local llama server health
@@ -84,7 +90,8 @@ def print_status(runtime: AgentRuntime):
     print(f"  Primary 5-Hour Utilization: {util:.1f}% ({turns} turns, {tokens} tokens)")
     print(f"  Primary Cooldown Status:    {'COOLING DOWN' if cooling else 'ACTIVE / READY'}")
     print(f"  RouteLLM Threshold (c):     {thresh:.2f} ({reason})")
-    print(f"  Local Llama Server:         {local_url} ({local_health})")
+    print(f"  Nous Cloud Tier:            {active_nous_model} ({nous_ready}, {nous_turns} turns, {nous_tokens} tokens)")
+    print(f"  Local Llama Server:         {local_url} ({local_health}, circuit: {'COOLING DOWN' if local_cooling else 'CLOSED'})")
     print(f"  Active Session ID:          {runtime.session_id}")
     print(f"  Workspace:                  {runtime.workspace_root}\n")
 
@@ -130,6 +137,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force local llama-server on port 8080 (Triad default)."
     )
+    parser.add_argument(
+        "--model",
+        dest="model",
+        type=str,
+        default=None,
+        help="Override the Nous cloud model ID (e.g. deepseek/deepseek-v4-flash-0731)."
+    )
     return parser
 
 
@@ -137,7 +151,7 @@ def main(argv=None):
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    runtime = AgentRuntime(auto_approve=args.auto_approve)
+    runtime = AgentRuntime(auto_approve=args.auto_approve, model_override=args.model)
 
     if args.resume:
         resumed = runtime.load_latest_session()
@@ -217,6 +231,17 @@ def main(argv=None):
         elif lowered == "/status":
             print_status(runtime)
             continue
+        elif lowered == "/model" or lowered.startswith("/model "):
+            parts = user_input.split(maxsplit=1)
+            if len(parts) == 1:
+                print(f"Active Nous model: {runtime.model_override or DEFAULT_NOUS_MODEL}")
+            elif parts[1].strip().lower() in ("reset", "default"):
+                runtime.model_override = None
+                print(f"\033[1;33m[Model Reset]\033[0m Active Nous model: {DEFAULT_NOUS_MODEL}")
+            else:
+                runtime.model_override = parts[1].strip()
+                print(f"\033[1;32m[Model Override]\033[0m Active Nous model: {runtime.model_override}")
+            continue
         elif lowered == "/clear":
             runtime.history = []
             print("\033[1;33m[Cleared]\033[0m Conversation history reset.")
@@ -225,7 +250,8 @@ def main(argv=None):
             print("\nCommands:")
             print("  \033[1m/architect <query>\033[0m  Delegate a big decision directly to Claude Code / Codex")
             print("  \033[1m/cancel\033[0m             Cancel or clear active turn state")
-            print("  \033[1m/status\033[0m             Show 5-hour quota and local engine health")
+            print("  \033[1m/status\033[0m             Show 5-hour quota, Nous model, and local engine health")
+            print("  \033[1m/model [id|reset]\033[0m   Show or override the Nous cloud model")
             print("  \033[1m/clear\033[0m              Reset session conversation history")
             print("  \033[1m/exit\033[0m               Exit Triad CLI (or Ctrl+C twice)\n")
             continue
