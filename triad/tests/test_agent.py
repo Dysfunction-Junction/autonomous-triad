@@ -111,30 +111,31 @@ def test_tool_registry():
 
 
 def test_router_default_local_orchestrator(monkeypatch):
-    router = ZeroCostRouter()
-    # Short turns stay on the local tier. Score-based escalation is Phase 2.1.
-    dec = router.select_route("Write a python script to parse CSV")
-    assert dec.selected_tier == ModelTier.TIER_3_LOCAL
+    with tempfile.TemporaryDirectory() as tmpdir:
+        router = ZeroCostRouter(tracker=RollingWindowTracker(ledger_path=Path(tmpdir) / "ledger.json"))
+        # Short turns stay on the local tier. Score-based escalation is Phase 2.1.
+        dec = router.select_route("Write a python script to parse CSV")
+        assert dec.selected_tier == ModelTier.TIER_3_LOCAL
 
-    # High complexity still starts local unless the caller delegates or the context budget is exceeded.
-    dec_complex = router.select_route("Refactor distributed state machine and fix race conditions")
-    assert dec_complex.selected_tier == ModelTier.TIER_3_LOCAL
+        # High complexity still starts local unless the caller delegates or the context budget is exceeded.
+        dec_complex = router.select_route("Refactor distributed state machine and fix race conditions")
+        assert dec_complex.selected_tier == ModelTier.TIER_3_LOCAL
 
-    # Explicit delegation to Chief Architect
-    dec_architect = router.select_route("Major migration plan", force_tier="architect")
-    assert dec_architect.selected_tier == ModelTier.TIER_1_PRIMARY
+        # Explicit delegation to Chief Architect
+        dec_architect = router.select_route("Major migration plan", force_tier="architect")
+        assert dec_architect.selected_tier == ModelTier.TIER_1_PRIMARY
 
-    # F2: a prompt that cannot fit 90% of n_ctx skips the local tier.
-    monkeypatch.setattr("triad.paths.llama_n_ctx", lambda: 2048)
-    # Reset the process cache so the monkeypatch is visible through exceeds_context_budget.
-    import triad.paths as paths_mod
-    paths_mod._N_CTX_TRIED = False
-    paths_mod._N_CTX_CACHE = None
-    monkeypatch.setattr(paths_mod, "llama_n_ctx", lambda: 2048)
-    dec_budget = router.select_route("x" * 20000)
-    assert dec_budget.selected_tier == ModelTier.TIER_2_CLOUD_FREE
-    assert "context budget" in dec_budget.reason
-    assert dec_budget.fallback_chain == []
+        # F2: a prompt that cannot fit 90% of n_ctx skips the local tier.
+        monkeypatch.setattr("triad.paths.llama_n_ctx", lambda: 2048)
+        # Reset the process cache so the monkeypatch is visible through exceeds_context_budget.
+        import triad.paths as paths_mod
+        paths_mod._N_CTX_TRIED = False
+        paths_mod._N_CTX_CACHE = None
+        monkeypatch.setattr(paths_mod, "llama_n_ctx", lambda: 2048)
+        dec_budget = router.select_route("x" * 20000)
+        assert dec_budget.selected_tier == ModelTier.TIER_2_CLOUD_FREE
+        assert "context budget" in dec_budget.reason
+        assert dec_budget.fallback_chain == []
 
 
 def test_exceeds_context_budget_none_when_n_ctx_unknown(monkeypatch):
