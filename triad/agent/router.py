@@ -29,11 +29,12 @@ except ImportError:
     from agent.tracker import RollingWindowTracker
 
 NOUS_AUTH_PATH = Path.home() / "AppData" / "Local" / "hermes" / "auth.json"
-DEFAULT_NOUS_MODEL = os.environ.get("TRIAD_NOUS_MODEL", "deepseek/deepseek-v4-flash-0731")
+DEFAULT_NOUS_MODEL = os.environ.get("TRIAD_NOUS_MODEL", "upstage/solar-mini4:free")
 NOUS_MODEL_CASCADE = list(dict.fromkeys([
     DEFAULT_NOUS_MODEL,
-    "deepseek/deepseek-v4-flash",
-    "upstage/solar-mini4:free",
+    "meituan/longcat-2.5:free",
+    "tencent/hy4-flash:free",
+    "deepseek/deepseek-v4-flash-0731",
 ]))
 
 
