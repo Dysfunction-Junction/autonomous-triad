@@ -6334,6 +6334,8 @@ def cmd_agent(args):
         argv.append("--local")
     if getattr(args, "model", None):
         argv.extend(["--model", args.model])
+    if getattr(args, "concise", False):
+        argv.append("--concise")
 
     sys.exit(agent_cli_main(argv))
 
@@ -6504,6 +6506,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_agent.add_argument("--free", "--nous", dest="force_free", action="store_true", help="Force Nous Research cloud tier")
     p_agent.add_argument("--local", "--fast", dest="force_local", action="store_true", help="Force local llama-server (:8080)")
     p_agent.add_argument("--model", dest="model", type=str, default=None, help="Override Nous cloud model ID")
+    p_agent.add_argument("--concise", dest="concise", action="store_true", help="Enable answer-first concise mode")
 
     return parser
 

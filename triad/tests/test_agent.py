@@ -283,3 +283,68 @@ def test_runtime_model_override_and_usage_recording(monkeypatch):
         stats = tracker.get_window_stats(provider="nous_free")
         assert stats["total_turns"] == 1
         assert stats["total_tokens"] == 150
+
+
+def test_nous_cascade_on_429_and_concise_prompt(monkeypatch):
+    import triad.agent.runtime as rt
+    from triad.agent.router import NOUS_MODEL_CASCADE
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setattr(rt, "DEFAULT_SESSION_DIR", Path(tmpdir) / "sessions")
+        tracker = RollingWindowTracker(ledger_path=Path(tmpdir) / "ledger.json")
+        runtime = rt.AgentRuntime(
+            workspace_root=Path(tmpdir),
+            router=ZeroCostRouter(tracker=tracker),
+            concise=True,
+        )
+        assert "CONCISE MODE:" in runtime._get_system_prompt()
+        monkeypatch.setattr(runtime, "_get_nous_api_key", lambda: "sk-test")
+
+        tried = []
+
+        def fake_http(base_url, model, messages, api_key=None, timeout=120, max_tokens=2048, loopback=False):
+            tried.append(model)
+            if len(tried) == 1:
+                raise RuntimeError("HTTP Error 429: Too Many Requests")
+            runtime._last_usage = (50, 10)
+            return "FALLBACK_OK"
+
+        monkeypatch.setattr(runtime, "_call_http_openai_compatible", fake_http)
+        reply = runtime.run_turn("hello", force_tier="nous")
+        assert reply == "FALLBACK_OK"
+        assert len(tried) == 2
+        assert tried[0] == NOUS_MODEL_CASCADE[0]
+        assert tried[1] == NOUS_MODEL_CASCADE[1]
+
+
+def test_compact_history_reduces_size():
+    from triad.agent.runtime import AgentRuntime
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        runtime = AgentRuntime(workspace_root=Path(tmpdir))
+        runtime.history = [{"role": "system", "content": "sys"}]
+        for i in range(10):
+            runtime.history.append({"role": "user", "content": f"turn {i} " + ("x" * 500)})
+            runtime.history.append({"role": "assistant", "content": f"reply {i} " + ("y" * 500)})
+
+        res = runtime.compact_history(keep_recent=4)
+        assert res["removed"] == 16
+        assert res["chars_after"] < res["chars_before"]
+        assert runtime.history[0]["role"] == "system"
+        assert runtime.history[1]["role"] == "user"
+        assert "[Compacted Earlier Turns" in runtime.history[1]["content"]
+        assert len(runtime.history) == 6
+
+
+def test_recall_memory_and_mesh_delegate_graceful_offline():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tools = ToolRegistry(workspace_root=Path(tmpdir), auto_approve=True)
+        bad_mem = tools.recall_memory("")
+        assert "error" in bad_mem
+
+        bad_mesh = tools.mesh_delegate(action="invalid_action")
+        assert "error" in bad_mesh
+
+        # Offline mesh returns clean error dict rather than raising
+        mesh_res = tools.mesh_delegate(action="ping")
+        assert isinstance(mesh_res, dict)

@@ -15,11 +15,27 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Callable
 
 try:
-    from triad.agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, DEFAULT_NOUS_MODEL, local_llama_v1_url
+    from triad.agent.router import (
+        ZeroCostRouter,
+        ModelTier,
+        RoutingDecision,
+        NOUS_AUTH_PATH,
+        DEFAULT_NOUS_MODEL,
+        NOUS_MODEL_CASCADE,
+        local_llama_v1_url,
+    )
     from triad.agent.tools import ToolRegistry
     from triad.agent.tracker import RollingWindowTracker
 except ImportError:
-    from agent.router import ZeroCostRouter, ModelTier, RoutingDecision, NOUS_AUTH_PATH, DEFAULT_NOUS_MODEL, local_llama_v1_url
+    from agent.router import (
+        ZeroCostRouter,
+        ModelTier,
+        RoutingDecision,
+        NOUS_AUTH_PATH,
+        DEFAULT_NOUS_MODEL,
+        NOUS_MODEL_CASCADE,
+        local_llama_v1_url,
+    )
     from agent.tools import ToolRegistry
     from agent.tracker import RollingWindowTracker
 
@@ -39,6 +55,8 @@ class AgentRuntime:
         router: Optional[ZeroCostRouter] = None,
         max_turns: int = 25,
         model_override: Optional[str] = None,
+        concise: bool = False,
+        max_history_chars: int = 24000,
     ):
         self.workspace_root = Path(workspace_root or Path.cwd()).resolve()
         self.auto_approve = auto_approve
@@ -47,13 +65,15 @@ class AgentRuntime:
         self.router = router or ZeroCostRouter(tracker=self.tracker)
         self.max_turns = max_turns
         self.model_override = model_override.strip() if isinstance(model_override, str) and model_override.strip() else None
+        self.concise = concise
+        self.max_history_chars = max_history_chars
         self.session_id = f"session_{int(time.time())}"
         self.history: List[Dict[str, str]] = []
         self._turn_active: bool = False
         self._turn_start: int = 0
 
     def _get_system_prompt(self) -> str:
-        return f"""You are Triad, an autonomous terminal engineer and orchestrator working directly in {self.workspace_root}.
+        base = f"""You are Triad, an autonomous terminal engineer and orchestrator working directly in {self.workspace_root}.
 You talk directly with the user and execute tasks locally. You handle routine code, workspace exploration, edits, and terminal commands using your local tools.
 
 CHIEF ARCHITECT ON STANDBY (CLAUDE CODE / CODEX):
@@ -73,6 +93,8 @@ AVAILABLE TOOLS:
 5. search_code(pattern: str, path: str = ".")
 6. run_command(command: str)
 7. consult_architect(query: str, context: str = ""): Delegate big decisions or stubborn bugs to Claude/Codex.
+8. recall_memory(query: str, limit: int = 5): Recall persistent context from local Mem0 / PiecesOS.
+9. mesh_delegate(action: str = "ping", skill_id: str = "", payload: dict = None): Coordinate with local Agent Mesh (:39401).
 
 TO CALL A TOOL:
 Output a single tool call block formatted exactly like this:
@@ -86,8 +108,10 @@ Output a single tool call block formatted exactly like this:
 ```
 After you output a tool call, wait for the tool output to be provided in the next turn.
 When your task is complete or you have answered the user, output your final response without tool calls.
-Always be concise, surgical, and fact-based. Never leave placeholders.
-"""
+Lead with the direct answer, command, or file path first. Be concise, surgical, and fact-based. Never leave placeholders."""
+        if self.concise:
+            return base + "\nCONCISE MODE: Reply in 1-5 short lines or bullets. Answer first; skip preamble.\n"
+        return base + "\n"
 
     def _get_nous_api_key(self) -> Optional[str]:
         env_key = os.environ.get("NOUS_API_KEY")
@@ -213,30 +237,46 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
 
                 elif tier == ModelTier.TIER_2_CLOUD_FREE:
                     key = self._get_nous_api_key()
-                    nous_model = (
-                        self.model_override
-                        or (
+                    if self.model_override:
+                        candidates = [self.model_override]
+                    else:
+                        lead = (
                             decision.model_name
                             if decision.selected_tier == ModelTier.TIER_2_CLOUD_FREE and decision.model_name
                             else DEFAULT_NOUS_MODEL
                         )
-                    )
-                    self._last_usage = (0, 0)
-                    text = self._call_http_openai_compatible(
-                        base_url="https://inference-api.nousresearch.com/v1",
-                        model=nous_model,
-                        messages=messages,
-                        api_key=key,
-                        timeout=90
-                    )
-                    ptok, ctok = getattr(self, "_last_usage", (0, 0))
-                    self.tracker.record_request(
-                        provider="nous_free",
-                        model=nous_model,
-                        prompt_tokens=ptok,
-                        completion_tokens=ctok,
-                    )
-                    return text, tier
+                        candidates = list(dict.fromkeys([lead] + list(NOUS_MODEL_CASCADE)))
+
+                    nous_exc: Optional[Exception] = None
+                    for idx, nous_model in enumerate(candidates):
+                        try:
+                            self._last_usage = (0, 0)
+                            text = self._call_http_openai_compatible(
+                                base_url="https://inference-api.nousresearch.com/v1",
+                                model=nous_model,
+                                messages=messages,
+                                api_key=key,
+                                timeout=90
+                            )
+                            ptok, ctok = getattr(self, "_last_usage", (0, 0))
+                            self.tracker.record_request(
+                                provider="nous_free",
+                                model=nous_model,
+                                prompt_tokens=ptok,
+                                completion_tokens=ctok,
+                            )
+                            return text, tier
+                        except Exception as candidate_exc:
+                            nous_exc = candidate_exc
+                            msg_l = str(candidate_exc).lower()
+                            retryable = any(code in msg_l for code in ("429", "500", "502", "503", "504", "rate limit", "timed out"))
+                            if retryable and idx + 1 < len(candidates):
+                                if on_status:
+                                    on_status(f"Nous model [{nous_model}] failed ({str(candidate_exc)[:60]}). Trying [{candidates[idx + 1]}]...")
+                                continue
+                            raise
+                    if nous_exc is not None:
+                        raise nous_exc
 
                 elif tier == ModelTier.TIER_3_LOCAL:
                     try:
@@ -350,6 +390,14 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
             while current_turn < self.max_turns:
                 current_turn += 1
 
+                if sum(len(m.get("content", "")) for m in self.history) > self.max_history_chars:
+                    compacted = self.compact_history()
+                    if compacted.get("removed", 0) > 0 and on_status:
+                        on_status(
+                            f"\033[1;30m[Auto-Compacted]\033[0m {compacted['removed']} older messages "
+                            f"({compacted['chars_before']} -> {compacted['chars_after']} chars)"
+                        )
+
                 # Dispatch to LLM via waterfall
                 assistant_reply, active_tier = self._dispatch_waterfall(
                     decision=decision,
@@ -375,6 +423,12 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
 
                     # Execute tool
                     tool_output = self._execute_tool(tool_call)
+                    if len(tool_output) > 12000:
+                        tool_output = (
+                            tool_output[:8000]
+                            + f"\n\n... [truncated {len(tool_output) - 11000} chars] ...\n\n"
+                            + tool_output[-3000:]
+                        )
 
                     # Feed tool result back to agent
                     self.history.append({
@@ -412,6 +466,64 @@ Always be concise, surgical, and fact-based. Never leave placeholders.
             self._save_session()
             return True
         return False
+
+    def compact_history(self, keep_recent: int = 6) -> Dict[str, int]:
+        """Compress older turns and tool outputs while keeping system prompt, active turn, and recent turns."""
+        chars_before = sum(len(m.get("content", "")) for m in self.history)
+        has_system = bool(self.history and self.history[0].get("role") == "system")
+        head = [self.history[0]] if has_system else []
+        start_idx = 1 if has_system else 0
+
+        # Never compact messages belonging to the currently active turn so rollback stays exact.
+        if self._turn_active and self._turn_start > start_idx:
+            cutoff = min(len(self.history) - keep_recent, self._turn_start)
+        else:
+            cutoff = len(self.history) - keep_recent
+
+        removed = 0
+        if cutoff > start_idx:
+            middle = self.history[start_idx:cutoff]
+            tail = self.history[cutoff:]
+
+            summary_prefix = "[Compacted Earlier Turns — Historical Context Only]"
+            summary_lines = []
+            for m in middle:
+                content = (m.get("content") or "").strip()
+                if content.startswith(summary_prefix):
+                    for line in content.splitlines()[1:]:
+                        if line.strip():
+                            summary_lines.append(line.strip())
+                    continue
+                role = m.get("role", "user").upper()
+                flat = content.replace("\n", " ")
+                if len(flat) > 180:
+                    flat = flat[:177] + "..."
+                if flat:
+                    summary_lines.append(f"- [{role}] {flat}")
+
+            compacted_msg = {
+                "role": "user",
+                "content": summary_prefix + "\n" + "\n".join(summary_lines[-25:]),
+            }
+            self.history = head + [compacted_msg] + tail
+            removed = len(middle)
+            if self._turn_active:
+                self._turn_start = max(len(head) + 1, self._turn_start - removed + 1)
+
+        # If retained messages still exceed max_history_chars, trim oversized TOOL_OUTPUT entries in tail.
+        if sum(len(m.get("content", "")) for m in self.history) > self.max_history_chars:
+            for idx in range(start_idx, len(self.history)):
+                msg = self.history[idx]
+                c = msg.get("content") or ""
+                if c.startswith("TOOL_OUTPUT for ") and len(c) > 3000:
+                    msg["content"] = c[:2000] + "\n... [compacted tool output] ...\n" + c[-800:]
+
+        chars_after = sum(len(m.get("content", "")) for m in self.history)
+        return {
+            "removed": removed,
+            "chars_before": chars_before,
+            "chars_after": chars_after,
+        }
 
     def _save_session(self) -> None:
         try:

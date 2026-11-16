@@ -144,6 +144,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the Nous cloud model ID (e.g. deepseek/deepseek-v4-flash-0731)."
     )
+    parser.add_argument(
+        "--concise",
+        dest="concise",
+        action="store_true",
+        help="Enable answer-first concise mode (1-5 short lines)."
+    )
     return parser
 
 
@@ -151,7 +157,7 @@ def main(argv=None):
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    runtime = AgentRuntime(auto_approve=args.auto_approve, model_override=args.model)
+    runtime = AgentRuntime(auto_approve=args.auto_approve, model_override=args.model, concise=args.concise)
 
     if args.resume:
         resumed = runtime.load_latest_session()
@@ -246,12 +252,24 @@ def main(argv=None):
             runtime.history = []
             print("\033[1;33m[Cleared]\033[0m Conversation history reset.")
             continue
+        elif lowered == "/compact":
+            res = runtime.compact_history()
+            print(f"\033[1;33m[Compacted]\033[0m Removed {res['removed']} older messages ({res['chars_before']} -> {res['chars_after']} chars).")
+            continue
+        elif lowered == "/concise":
+            runtime.concise = not runtime.concise
+            if runtime.history and runtime.history[0].get("role") == "system":
+                runtime.history[0]["content"] = runtime._get_system_prompt()
+            print(f"\033[1;33m[Concise Mode]\033[0m {'ON' if runtime.concise else 'OFF'}")
+            continue
         elif lowered == "/help":
             print("\nCommands:")
             print("  \033[1m/architect <query>\033[0m  Delegate a big decision directly to Claude Code / Codex")
             print("  \033[1m/cancel\033[0m             Cancel or clear active turn state")
             print("  \033[1m/status\033[0m             Show 5-hour quota, Nous model, and local engine health")
             print("  \033[1m/model [id|reset]\033[0m   Show or override the Nous cloud model")
+            print("  \033[1m/compact\033[0m            Compress older turns to save context tokens")
+            print("  \033[1m/concise\033[0m            Toggle answer-first concise mode")
             print("  \033[1m/clear\033[0m              Reset session conversation history")
             print("  \033[1m/exit\033[0m               Exit Triad CLI (or Ctrl+C twice)\n")
             continue

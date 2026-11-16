@@ -30,6 +30,11 @@ except ImportError:
 
 NOUS_AUTH_PATH = Path.home() / "AppData" / "Local" / "hermes" / "auth.json"
 DEFAULT_NOUS_MODEL = os.environ.get("TRIAD_NOUS_MODEL", "deepseek/deepseek-v4-flash-0731")
+NOUS_MODEL_CASCADE = list(dict.fromkeys([
+    DEFAULT_NOUS_MODEL,
+    "deepseek/deepseek-v4-flash",
+    "upstage/solar-mini4:free",
+]))
 
 
 def local_llama_v1_url() -> str:

@@ -10,8 +10,11 @@ Follows the agy/Claude Code permission model:
 
 import os
 import re
+import json
 import subprocess
 import fnmatch
+import urllib.request
+import urllib.error
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -340,3 +343,83 @@ class ToolRegistry:
             }
         except Exception as exc:
             return {"error": f"Failed to consult Chief Architect: {exc}"}
+
+    def recall_memory(self, query: str, limit: int = 5) -> Dict[str, Any]:
+        """Recall persistent context from local Mem0 when available."""
+        q = (query or "").strip()
+        if not q:
+            return {"error": "query must not be empty"}
+        max_items = max(1, min(int(limit or 5), 20))
+        results = []
+        sources = []
+
+        mem0_script = Path.home() / ".agents" / "skills" / "mem0" / "mem0.js"
+        if mem0_script.exists():
+            try:
+                proc = subprocess.run(
+                    ["node", str(mem0_script), "search", q],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=5,
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()][:max_items]
+                    results.extend({"source": "mem0", "text": ln} for ln in lines)
+                    sources.append("mem0")
+            except Exception:
+                pass
+
+        return {
+            "query": q,
+            "status": "ok" if sources else "unavailable",
+            "sources": sources,
+            "count": len(results),
+            "results": results[:max_items],
+        }
+
+    def mesh_delegate(
+        self,
+        action: str = "ping",
+        skill_id: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Communicate with the local Agent Mesh delegate endpoint (:39401)."""
+        act = (action or "ping").strip().lower()
+        if act not in ("ping", "skills", "dispatch"):
+            return {"error": f"Unsupported mesh action '{action}'. Use ping, skills, or dispatch."}
+
+        try:
+            from triad.paths import PORT_AGENT_MESH_MCP
+        except ImportError:
+            from paths import PORT_AGENT_MESH_MCP
+
+        body: Dict[str, Any] = {
+            "v": 1,
+            "id": f"triad-{os.getpid()}",
+            "from": "triad-agent",
+            "to": "agent-mesh-mcp",
+            "action": act,
+        }
+        if act == "dispatch":
+            dispatch_payload = dict(payload) if isinstance(payload, dict) else {}
+            if skill_id:
+                dispatch_payload.setdefault("skillId", skill_id)
+            body["payload"] = dispatch_payload
+
+        headers = {"Content-Type": "application/json", "User-Agent": "triad-agent"}
+        token = os.environ.get("TRIAD_MESH_TOKEN") or os.environ.get("MISHMASH_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token.strip()}"
+
+        url = f"http://127.0.0.1:{PORT_AGENT_MESH_MCP}/mishmash/delegate"
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=5) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as he:
+            return {"error": f"Agent Mesh HTTP {he.code}: {he.reason}"}
+        except Exception as exc:
+            return {"error": f"Agent Mesh offline or unreachable ({url}): {exc}"}
