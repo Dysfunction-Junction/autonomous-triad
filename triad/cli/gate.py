@@ -90,7 +90,7 @@ def cmd_gate(args, env: Optional[Dict[str, str]] = None):
             repo_root=repo_root,
             prefix="triad-gate",
             require_index=True,
-            runner=lambda a, e: _run_gate(a, env=e, in_worktree=True, review_base=a._review_base),
+            runner=lambda a, e: _eng("_run_gate", _run_gate)(a, env=e, in_worktree=True, review_base=a._review_base),
             error_label="Triad Gate Error",
             phase_label="validation",
             nm_phase_label="gate validation",
