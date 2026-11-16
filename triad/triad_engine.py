@@ -1568,6 +1568,11 @@ except ImportError:
         cmd_hook,
     )
 
+try:
+    from triad.cli.mesh import _mesh_list_tools, cmd_mesh
+except ImportError:
+    from cli.mesh import _mesh_list_tools, cmd_mesh
+
 
 def is_plausible_natural_language(first_arg: str, total_args: int, known_commands: set) -> bool:
     """Return True if argument looks like a natural language query or diff rather than a mistyped subcommand."""
