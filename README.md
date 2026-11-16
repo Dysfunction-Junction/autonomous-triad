@@ -2,7 +2,7 @@
 
 > **Autonomous multi-agent collaboration framework with zero incremental API cost, MCP-stripped advisory prompts, circuit-breaker failover, and an adversarial Red/Blue review arena.**
 
-**Status:** v3.3 (2026-10-02) · 292 unit tests passing (1 skipped) · Windows-hardened
+**Status:** v3.4 (2026-11-16) · 580+ unit tests passing · Windows-hardened
 
 ---
 
@@ -122,7 +122,10 @@ Hardening: Host-header allow-list (`localhost`, `127.0.0.1`, `::1`), Origin/CORS
 autonomous-triad/
 ├── bin/                     # triad, triad.cmd, triad.ps1 launchers
 ├── triad/
-│   ├── triad_engine.py      # CLI + orchestrator, gate, hook, doctor
+│   ├── triad_engine.py      # CLI parser, entrypoint, and backward-compat re-exports
+│   ├── cli/                 # doctor.py, review.py, gate.py, hook.py, mesh.py, sync.py
+│   ├── patching.py          # Verified patch apply, rollback, and tree fingerprinting
+│   ├── agent/               # Zero-cost terminal agent (cli, router, runtime, tools, tracker)
 │   ├── intent_engine.py     # Scored deterministic intent classifier
 │   ├── advisor_manager.py   # advisors.json loader, routing, limit detection
 │   ├── advisors.json        # Declarative advisor definitions
