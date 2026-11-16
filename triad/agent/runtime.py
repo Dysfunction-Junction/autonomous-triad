@@ -346,6 +346,23 @@ Lead with the direct answer, command, or file path first. Be concise, surgical, 
         args = tool_call.get("arguments")
         if not isinstance(args, dict):
             args = {}
+        else:
+            args = dict(args)
+
+        if name == "consult_architect":
+            raw_ctx = args.get("context")
+            if raw_ctx is not None and not isinstance(raw_ctx, str):
+                return json.dumps({"error": "Invalid argument: 'context' must be a string."})
+            if not (raw_ctx or "").strip() and len(self.history) > 1:
+                recent = [m for m in self.history[1:] if m.get("content")]
+                snippets = []
+                for m in recent[-6:]:
+                    role = m.get("role", "user").upper()
+                    body = (m.get("content") or "").strip().replace("\n", " ")
+                    if len(body) > 400:
+                        body = body[:397] + "..."
+                    snippets.append(f"[{role}] {body}")
+                args["context"] = "\n".join(snippets)[-3000:]
 
         method = getattr(self.tools, name, None)
         if not method or not callable(method):
@@ -424,11 +441,13 @@ Lead with the direct answer, command, or file path first. Be concise, surgical, 
                     # Execute tool
                     tool_output = self._execute_tool(tool_call)
                     if len(tool_output) > 12000:
+                        orig_len = len(tool_output)
                         tool_output = (
                             tool_output[:8000]
-                            + f"\n\n... [truncated {len(tool_output) - 11000} chars] ...\n\n"
+                            + f"\n\n... [truncated {orig_len - 11000} chars] ...\n\n"
                             + tool_output[-3000:]
                         )
+                        self._record_savings_safe(orig_len - len(tool_output), source="tool_truncation")
 
                     # Feed tool result back to agent
                     self.history.append({
@@ -519,11 +538,20 @@ Lead with the direct answer, command, or file path first. Be concise, surgical, 
                     msg["content"] = c[:2000] + "\n... [compacted tool output] ...\n" + c[-800:]
 
         chars_after = sum(len(m.get("content", "")) for m in self.history)
+        if chars_before > chars_after:
+            self._record_savings_safe(chars_before - chars_after, source="compaction")
         return {
             "removed": removed,
             "chars_before": chars_before,
             "chars_after": chars_after,
         }
+
+    def _record_savings_safe(self, chars_saved: int, source: str) -> None:
+        """Best-effort savings telemetry; never abort a turn or compaction on ledger errors."""
+        try:
+            self.tracker.record_savings(chars_saved, source=source)
+        except Exception:
+            pass
 
     def _save_session(self) -> None:
         try:

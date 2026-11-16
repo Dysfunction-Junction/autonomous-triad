@@ -5,8 +5,10 @@ Maintains a local append-only ledger in ~/.triad/usage_ledger.json to calculate 
 utilization and proactively shed load before hitting hard provider rate limits.
 """
 
+import contextlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Any
@@ -34,10 +36,52 @@ DEFAULT_SOFT_LIMIT = 0.80  # Proactively switch non-essential traffic at 80% usa
 
 
 class RollingWindowTracker:
+    _thread_lock = threading.Lock()
+
     def __init__(self, ledger_path: Path = DEFAULT_LEDGER_PATH):
         self.ledger_path = Path(ledger_path)
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_ledger_file()
+
+    @contextlib.contextmanager
+    def _ledger_lock(self):
+        """Serialize read-modify-write ledger updates across threads and processes."""
+        lock_path = self.ledger_path.with_suffix(".lock")
+        with self._thread_lock:
+            fh = open(lock_path, "a+b")
+            locked = False
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    deadline = time.monotonic() + 5.0
+                    while True:
+                        try:
+                            fh.seek(0)
+                            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                            locked = True
+                            break
+                        except OSError:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError(f"Timed out acquiring ledger lock: {lock_path}")
+                            time.sleep(0.02)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                    locked = True
+                yield
+            finally:
+                if locked:
+                    try:
+                        if os.name == "nt":
+                            import msvcrt
+                            fh.seek(0)
+                            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+                            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                fh.close()
 
     def _ensure_ledger_file(self) -> None:
         if not self.ledger_path.exists():
@@ -78,25 +122,27 @@ class RollingWindowTracker:
         task_type: str = "interactive",
         status: str = "success"
     ) -> None:
-        data = self._load_ledger()
-        entry = {
-            "timestamp": time.time(),
-            "provider": provider,
-            "model": model,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-            "task_type": task_type,
-            "status": status,
-        }
-        data.setdefault("requests", []).append(entry)
-        self._save_ledger(data)
+        with self._ledger_lock():
+            data = self._load_ledger()
+            entry = {
+                "timestamp": time.time(),
+                "provider": provider,
+                "model": model,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                "task_type": task_type,
+                "status": status,
+            }
+            data.setdefault("requests", []).append(entry)
+            self._save_ledger(data)
 
     def mark_circuit_break(self, provider: str, cooldown_seconds: int = 300) -> None:
         """Mark a provider as cooling down (e.g. after receiving HTTP 429 or CLI rate limit error)."""
-        data = self._load_ledger()
-        data.setdefault("cooldowns", {})[provider] = time.time() + cooldown_seconds
-        self._save_ledger(data)
+        with self._ledger_lock():
+            data = self._load_ledger()
+            data.setdefault("cooldowns", {})[provider] = time.time() + cooldown_seconds
+            self._save_ledger(data)
 
     def is_cooling_down(self, provider: str) -> bool:
         """Check if provider is currently in a cooldown window."""
@@ -138,3 +184,27 @@ class RollingWindowTracker:
     def is_soft_limit_reached(self, provider: str = "primary", threshold: float = DEFAULT_SOFT_LIMIT) -> bool:
         stats = self.get_window_stats(provider=provider)
         return stats.get("utilization", 0.0) >= threshold or stats.get("is_cooling_down", False)
+
+    def record_savings(self, chars_saved: int, source: str = "compaction") -> None:
+        """Record characters/tokens saved via compaction or tool-output truncation."""
+        if chars_saved <= 0:
+            return
+        with self._ledger_lock():
+            data = self._load_ledger()
+            savings = data.setdefault("savings", {"chars_saved": 0, "events": 0, "by_source": {}})
+            savings["chars_saved"] = int(savings.get("chars_saved", 0)) + int(chars_saved)
+            savings["events"] = int(savings.get("events", 0)) + 1
+            by_src = savings.setdefault("by_source", {})
+            by_src[source] = int(by_src.get(source, 0)) + int(chars_saved)
+            self._save_ledger(data)
+
+    def get_savings_stats(self) -> Dict[str, Any]:
+        """Return cumulative context savings statistics."""
+        data = self._load_ledger()
+        savings = data.get("savings") or {}
+        chars_saved = int(savings.get("chars_saved", 0))
+        return {
+            "chars_saved": chars_saved,
+            "estimated_tokens_saved": chars_saved // 4,
+            "events": int(savings.get("events", 0)),
+        }

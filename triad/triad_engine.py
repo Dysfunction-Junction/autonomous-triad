@@ -2145,6 +2145,8 @@ def query_gate_fix(diag_output: str, args) -> str:
     competition = getattr(args, "competition", False)
     timeout = getattr(args, "timeout", 240)
     engine = getattr(args, "engine", "auto")
+    if engine == "auto" and os.environ.get("TRIAD_GATE_ENGINE"):
+        engine = os.environ["TRIAD_GATE_ENGINE"].strip() or "auto"
 
     if competition:
         try:
@@ -4240,6 +4242,8 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
         sys.exit(1)
 
     engine = getattr(args, "engine", "auto")
+    if engine == "auto" and os.environ.get("TRIAD_GATE_ENGINE"):
+        engine = os.environ["TRIAD_GATE_ENGINE"].strip() or "auto"
     competition = getattr(args, "competition", False)
     try:
         from triad.intent_engine import is_high_stakes

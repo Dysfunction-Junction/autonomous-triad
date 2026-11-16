@@ -348,3 +348,77 @@ def test_recall_memory_and_mesh_delegate_graceful_offline():
         # Offline mesh returns clean error dict rather than raising
         mesh_res = tools.mesh_delegate(action="ping")
         assert isinstance(mesh_res, dict)
+
+
+def test_savings_telemetry_and_architect_handoff(monkeypatch):
+    import triad.agent.runtime as rt
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setattr(rt, "DEFAULT_SESSION_DIR", Path(tmpdir) / "sessions")
+        tracker = RollingWindowTracker(ledger_path=Path(tmpdir) / "ledger.json")
+        runtime = rt.AgentRuntime(
+            workspace_root=Path(tmpdir),
+            router=ZeroCostRouter(tracker=tracker),
+            auto_approve=True,
+        )
+        runtime.history = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "Investigate bug in auth.py"},
+            {"role": "assistant", "content": "Checked auth.py, found token issue"},
+        ]
+
+        captured = {}
+
+        def fake_consult(query, context=None):
+            captured["query"] = query
+            captured["context"] = context
+            return {"advice": "ok"}
+
+        monkeypatch.setattr(runtime.tools, "consult_architect", fake_consult)
+        runtime._execute_tool({"name": "consult_architect", "arguments": {"query": "How should we fix?"}})
+        assert "Investigate bug in auth.py" in (captured["context"] or "")
+
+        bad_ctx = runtime._execute_tool({"name": "consult_architect", "arguments": {"query": "Fix", "context": {"file": "auth.py"}}})
+        assert "must be a string" in bad_ctx
+
+        # Exercise actual tool-output truncation and history compaction telemetry
+        big_file = Path(tmpdir) / "big.txt"
+        big_file.write_text("A" * 20000, encoding="utf-8")
+        calls = {"n": 0}
+
+        def fake_dispatch(decision, messages, on_status=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return '```tool_call\n{"name": "read_file", "arguments": {"path": "big.txt", "end_line": 100}}\n```', ModelTier.TIER_2_CLOUD_FREE
+            return "DONE", ModelTier.TIER_2_CLOUD_FREE
+
+        monkeypatch.setattr(runtime, "_dispatch_waterfall", fake_dispatch)
+        assert runtime.run_turn("read big file", force_tier="nous") == "DONE"
+        s1 = tracker.get_savings_stats()
+        assert s1["events"] == 1
+        assert s1["chars_saved"] > 5000
+
+        for i in range(6):
+            runtime.history.append({"role": "user", "content": f"extra {i} " + ("z" * 400)})
+        comp = runtime.compact_history(keep_recent=4)
+        assert comp["chars_before"] > comp["chars_after"]
+        s2 = tracker.get_savings_stats()
+        assert s2["events"] == 2
+        assert s2["chars_saved"] == s1["chars_saved"] + (comp["chars_before"] - comp["chars_after"])
+
+        # Telemetry failures (OSError / TimeoutError) must not abort tool turns or compaction
+        def fail_os(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(tracker, "record_savings", fail_os)
+        calls["n"] = 0
+        assert runtime.run_turn("read big file again", force_tier="nous") == "DONE"
+
+        def fail_timeout(*args, **kwargs):
+            raise TimeoutError("lock busy")
+
+        monkeypatch.setattr(tracker, "record_savings", fail_timeout)
+        for i in range(6):
+            runtime.history.append({"role": "user", "content": f"extra2 {i} " + ("w" * 400)})
+        comp2 = runtime.compact_history(keep_recent=4)
+        assert comp2["chars_before"] > comp2["chars_after"]

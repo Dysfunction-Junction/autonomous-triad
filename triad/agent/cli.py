@@ -69,6 +69,7 @@ def print_status(runtime: AgentRuntime):
     nous_stats = runtime.tracker.get_window_stats(provider="nous_free")
     nous_turns = nous_stats.get("total_turns", 0)
     nous_tokens = nous_stats.get("total_tokens", 0)
+    savings = runtime.tracker.get_savings_stats()
     local_cooling = runtime.tracker.is_cooling_down("llama_local")
     nous_ready = "READY" if runtime._get_nous_api_key() else "MISSING AUTH"
     active_nous_model = runtime.model_override or DEFAULT_NOUS_MODEL
@@ -91,6 +92,7 @@ def print_status(runtime: AgentRuntime):
     print(f"  Primary Cooldown Status:    {'COOLING DOWN' if cooling else 'ACTIVE / READY'}")
     print(f"  RouteLLM Threshold (c):     {thresh:.2f} ({reason})")
     print(f"  Nous Cloud Tier:            {active_nous_model} ({nous_ready}, {nous_turns} turns, {nous_tokens} tokens)")
+    print(f"  Context Savings:            ~{savings['estimated_tokens_saved']} est. tokens ({savings['events']} compactions)")
     print(f"  Local Llama Server:         {local_url} ({local_health}, circuit: {'COOLING DOWN' if local_cooling else 'CLOSED'})")
     print(f"  Active Session ID:          {runtime.session_id}")
     print(f"  Workspace:                  {runtime.workspace_root}\n")
