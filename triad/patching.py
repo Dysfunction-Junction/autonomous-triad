@@ -1,12 +1,9 @@
 """Patch application, rollback, tree-snapshot, and working-tree fingerprinting."""
 
-import ast
 import contextlib
 import hashlib
-import json
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
