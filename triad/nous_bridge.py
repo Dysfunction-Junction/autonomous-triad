@@ -40,49 +40,56 @@ INFERENCE_URL = "https://inference-api.nousresearch.com/v1/chat/completions"
 # Directs each query to the best model for that specific job, with automatic cascading failover
 TASK_MODEL_CASCADES = {
     "coding": [
-        "poolside/laguna-xs-2.1:free",      # Specialized code intelligence (1.8s ultra-fast)
-        "stepfun/step-3.7-flash:free",       # Fast flash fallback (matches AGENTS.md standard)
-        "upstage/solar-pro4:free",           # Logic & reasoning fallback
-        "poolside/laguna-s-2.1:free",        # Deep code model
+        "upstage/solar-mini4:free",          # Nous 4 free cascade lead
+        "meituan/longcat-2.5:free",          # Fast long-context free fallback
+        "tencent/hy4-flash:free",            # Free flash fallback
+        "stepfun/step-3.7-flash:free",       # General flash fallback
     ],
     "architecture": [
-        "upstage/solar-pro4:free",           # Flagship general reasoning & structural critique
-        "stepfun/step-3.7-flash:free",       # Flash reasoning fallback
-        "poolside/laguna-xs-2.1:free",       # Code architecture check
-    ],
-    "reasoning": [
-        "upstage/solar-pro4:free",           # Deep reasoning & formal logic
-        "poolside/laguna-s-2.1:free",        # Advanced code reasoning
-        "stepfun/step-3.7-flash:free",       # Fast reasoning fallback
-    ],
-    "scraping": [
-        "stepfun/step-3.7-flash:free",       # High-throughput flash for parsing HTML/DOM/JSON ($0 cost)
-        "poolside/laguna-xs-2.1:free",       # Ultra-fast parser
-        "upstage/solar-pro4:free",           # Complex tabular fallback
-    ],
-    "browsing": [
-        "stepfun/step-3.7-flash:free",       # Low-latency path & filesystem search ($0 cost)
-        "poolside/laguna-xs-2.1:free",       # Fast tree extractor
-        "upstage/solar-pro4:free",
-    ],
-    "mobile": [
-        "stepfun/step-3.7-flash:free",       # Ultra-responsive low-latency mobile tool actions
-        "upstage/solar-pro4:free",           # Reasoning fallback for complex phone tasks
-        "poolside/laguna-xs-2.1:free",
-    ],
-    "micro": [
-        "poolside/laguna-xs-2.1:free",       # 1.8s instant response for commit msg/docstrings
+        "upstage/solar-mini4:free",          # Nous 4 free cascade lead
+        "meituan/longcat-2.5:free",          # Long-context structural critique
+        "tencent/hy4-flash:free",            # Free flash fallback
         "stepfun/step-3.7-flash:free",
     ],
+    "reasoning": [
+        "upstage/solar-mini4:free",          # Nous 4 free cascade lead
+        "meituan/longcat-2.5:free",          # Deep reasoning fallback
+        "tencent/hy4-flash:free",
+        "stepfun/step-3.7-flash:free",
+    ],
+    "scraping": [
+        "upstage/solar-mini4:free",
+        "tencent/hy4-flash:free",
+        "meituan/longcat-2.5:free",
+        "stepfun/step-3.7-flash:free",
+    ],
+    "browsing": [
+        "upstage/solar-mini4:free",
+        "tencent/hy4-flash:free",
+        "meituan/longcat-2.5:free",
+        "stepfun/step-3.7-flash:free",
+    ],
+    "mobile": [
+        "upstage/solar-mini4:free",
+        "tencent/hy4-flash:free",
+        "meituan/longcat-2.5:free",
+        "stepfun/step-3.7-flash:free",
+    ],
+    "micro": [
+        "tencent/hy4-flash:free",
+        "upstage/solar-mini4:free",
+        "meituan/longcat-2.5:free",
+    ],
     "sync": [
-        "stepfun/step-3.7-flash:free",       # Fast zero-latency sync verification ($0 cost)
-        "poolside/laguna-xs-2.1:free",
-        "upstage/solar-pro4:free",
+        "upstage/solar-mini4:free",
+        "tencent/hy4-flash:free",
+        "meituan/longcat-2.5:free",
     ],
     "general": [
-        "stepfun/step-3.7-flash:free",       # Fast and reliable general knowledge & advice
-        "upstage/solar-pro4:free",           # Balanced general knowledge fallback
-        "poolside/laguna-xs-2.1:free",
+        "upstage/solar-mini4:free",          # Nous 4 free cascade lead
+        "meituan/longcat-2.5:free",
+        "tencent/hy4-flash:free",
+        "stepfun/step-3.7-flash:free",
     ],
 }
 

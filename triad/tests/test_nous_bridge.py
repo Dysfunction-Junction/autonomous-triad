@@ -183,7 +183,7 @@ class TestNousBridge(unittest.TestCase):
 
         success, content, model, all_rate_limited = query_nous("def calculate(): pass")
         self.assertTrue(success)
-        self.assertEqual(model, "poolside/laguna-xs-2.1:free")
+        self.assertEqual(model, "upstage/solar-mini4:free")
         self.assertFalse(all_rate_limited)
 
     @patch("triad.nous_bridge.urllib.request.urlopen")
@@ -191,8 +191,8 @@ class TestNousBridge(unittest.TestCase):
     def test_cooldown_reorders_failing_model(self, mock_get_token, mock_urlopen):
         import triad.nous_bridge as nb
         # Place lead coding model on cooldown
-        nb.record_model_cooldown("poolside/laguna-xs-2.1:free", seconds=60.0)
-        self.assertTrue(nb.is_model_on_cooldown("poolside/laguna-xs-2.1:free"))
+        nb.record_model_cooldown("upstage/solar-mini4:free", seconds=60.0)
+        self.assertTrue(nb.is_model_on_cooldown("upstage/solar-mini4:free"))
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = json.dumps({
@@ -203,8 +203,8 @@ class TestNousBridge(unittest.TestCase):
 
         success, content, model, _ = query_nous("def calculate(): pass")
         self.assertTrue(success)
-        # Should attempt the uncooled model (stepfun/step-3.7-flash:free) first
-        self.assertEqual(model, "stepfun/step-3.7-flash:free")
+        # Should attempt the uncooled model (meituan/longcat-2.5:free) first
+        self.assertEqual(model, "meituan/longcat-2.5:free")
 
     @patch("triad.nous_bridge.urllib.request.urlopen")
     @patch("triad.nous_bridge.get_nous_token", return_value="dummy_token")
@@ -248,9 +248,9 @@ class TestNousBridge(unittest.TestCase):
 
         success, content, model, _ = query_nous("def calculate(): pass")
         self.assertTrue(success)
-        self.assertEqual(model, "stepfun/step-3.7-flash:free")
+        self.assertEqual(model, "meituan/longcat-2.5:free")
         # Verify first model was placed on cooldown
-        self.assertTrue(nb.is_model_on_cooldown("poolside/laguna-xs-2.1:free"))
+        self.assertTrue(nb.is_model_on_cooldown("upstage/solar-mini4:free"))
 
 
 if __name__ == "__main__":

@@ -1945,4 +1945,5 @@ def main():
         handler(args)
 
 if __name__ == "__main__":
+    sys.modules.setdefault("triad_engine", sys.modules[__name__])
     main()

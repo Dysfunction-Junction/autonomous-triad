@@ -18,11 +18,31 @@ except ImportError:
     from competition import query_competition_council
 
 
+def _te():
+    mod = sys.modules.get("triad.triad_engine") or sys.modules.get("triad_engine")
+    if mod is None:
+        main_mod = sys.modules.get("__main__")
+        if main_mod is not None and Path(getattr(main_mod, "__file__", "")).name == "triad_engine.py":
+            mod = main_mod
+    if mod is None:
+        try:
+            from triad import triad_engine as mod
+        except ImportError:
+            import triad_engine as mod
+    return mod
+
+
 def _eng(name: str, fallback: Any) -> Any:
     mod = sys.modules.get("triad.triad_engine") or sys.modules.get("triad_engine")
+    if mod is None:
+        main_mod = sys.modules.get("__main__")
+        if main_mod is not None and Path(getattr(main_mod, "__file__", "")).name == "triad_engine.py":
+            mod = main_mod
     if mod is not None and hasattr(mod, name):
         return getattr(mod, name)
-    return fallback
+    if fallback is not None:
+        return fallback
+    return getattr(_te(), name)
 
 
 def _handle_adversarial_session_result(session: Dict[str, Any]) -> None:
