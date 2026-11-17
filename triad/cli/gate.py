@@ -9,7 +9,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import uuid

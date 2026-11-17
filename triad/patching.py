@@ -4,13 +4,10 @@
 # Links: triad/worktree.py, triad/triad_engine.py
 # Queries: "how is a patch applied and rolled back", "what is a tree snapshot", "how is the working tree fingerprinted"
 
-import ast
 import contextlib
 import hashlib
-import json
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys

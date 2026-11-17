@@ -128,7 +128,9 @@ const areaOf = (path) => {
 
 // ---------------------------------------------------------------- collect
 
-const tracked = git("ls-files", "-z").split("\0").filter(Boolean);
+// `git ls-files` prints an unmerged path once per index stage (1/2/3) while a merge is
+// in progress, so dedupe before it reaches the coverage denominator.
+const tracked = [...new Set(git("ls-files", "-z").split("\0").filter(Boolean))];
 const branch = (() => {
   try {
     return git("rev-parse", "--abbrev-ref", "HEAD");

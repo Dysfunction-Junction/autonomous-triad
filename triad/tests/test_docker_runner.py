@@ -207,9 +207,13 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.addCleanup(self._td.cleanup)
         self.ws = Path(self._td.name).resolve()
-        # mkdtemp creates 0700 owned by the host user; the container runs as uid 65534 and could neither list
-        # nor write /work. The directory is a throwaway that holds no host data.
-        os.chmod(self.ws, 0o777)
+        # mkdtemp already creates 0700 owned by the host user, and on Linux the container runs as
+        # that same uid:gid (`_container_user`), so it can list and write /work without any widening.
+        # Only the non-Linux path uses the fixed uid 65534, which needs a world-writable mount.
+        # Forcing 0777 here used to contradict `test_private_workspace_is_readable_and_writable`,
+        # which asserts the workspace stays 0700.
+        if not sys.platform.startswith("linux"):
+            os.chmod(self.ws, 0o777)
 
     def _run(self, code, timeout=60, **kw):
         runner = DockerRunner({"t": ["python", "-c", code]}, **kw)

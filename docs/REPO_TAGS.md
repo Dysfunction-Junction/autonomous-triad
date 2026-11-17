@@ -1,12 +1,12 @@
 # Repository tag index
 
 > Generated view — do not edit. Regenerate with `node scripts/repo-tags.mjs`.
-> Source: `git ls-files` · branch `chore/tag-headers` · commit `4109629` · 91 tracked files.
+> Source: `git ls-files` · branch `chore/tag-headers` · commit `1376382` · 93 tracked files.
 >
 > `Tags/Links/Queries` is the header written at the top of each file. This file is the map;
 > the headers are the body. Both move together in the same commit.
 
-**Coverage:** 91 / 91 files carry a tag header (100.0%). 0 untagged.
+**Coverage:** 93 / 93 files carry a tag header (100.0%). 0 untagged.
 
 ## How to read this
 
@@ -85,6 +85,8 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/notifier.py` | `notify`<br>`protocol-contract` | `triad/cli/gate.py`<br>`triad/triad_engine.py` |
 | `triad/nous_bridge.py` | `nous`<br>`routing`<br>`cost` | `triad/advisor_manager.py`<br>`triad/cli/doctor.py` |
 | `triad/patching.py` | `patching`<br>`worktree`<br>`verification` | `triad/worktree.py`<br>`triad/triad_engine.py` |
+| `triad/patching.py` | `patching`<br>`worktree`<br>`verification` | `triad/worktree.py`<br>`triad/triad_engine.py` |
+| `triad/patching.py` | `patching`<br>`worktree`<br>`verification` | `triad/worktree.py`<br>`triad/triad_engine.py` |
 | `triad/paths.py` | `ops-runbook`<br>`sync` | `triad/sync_manager.py`<br>`AGENTS.md` |
 | `triad/procutil.py` | `ops-runbook`<br>`protocol-contract` | `triad/advisor_manager.py`<br>`triad/server.py` |
 | `triad/prompt_rewriter.py` | `intent`<br>`review` | `triad/intent_engine.py`<br>`triad/prw.py` |
@@ -141,7 +143,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `notify` | 3 | [tags/notify.md](tags/notify.md) |
 | `nous` | 2 | [tags/nous.md](tags/nous.md) |
 | `ops-runbook` | 23 | [tags/ops-runbook.md](tags/ops-runbook.md) |
-| `patching` | 5 | [tags/patching.md](tags/patching.md) |
+| `patching` | 7 | [tags/patching.md](tags/patching.md) |
 | `protocol-contract` | 11 | [tags/protocol-contract.md](tags/protocol-contract.md) |
 | `review` | 14 | [tags/review.md](tags/review.md) |
 | `routing` | 10 | [tags/routing.md](tags/routing.md) |
@@ -151,5 +153,5 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `test-fixture` | 23 | [tags/test-fixture.md](tags/test-fixture.md) |
 | `tooling` | 9 | [tags/tooling.md](tags/tooling.md) |
 | `triage` | 3 | [tags/triage.md](tags/triage.md) |
-| `verification` | 22 | [tags/verification.md](tags/verification.md) |
-| `worktree` | 6 | [tags/worktree.md](tags/worktree.md) |
+| `verification` | 24 | [tags/verification.md](tags/verification.md) |
+| `worktree` | 8 | [tags/worktree.md](tags/worktree.md) |
