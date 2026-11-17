@@ -1,5 +1,9 @@
 """System health & cost audit CLI command (`triad doctor`)."""
 
+# Tags: cli, ops-runbook, cost, failover
+# Links: triad/circuit.py, triad/nous_bridge.py, scripts/verify.ps1
+# Queries: "what does triad doctor check", "how do I see projected cost", "which advisors are unhealthy"
+
 import json
 import os
 import sys

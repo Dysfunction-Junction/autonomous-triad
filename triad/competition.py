@@ -4,6 +4,10 @@ Runs Claude Code and OpenAI Codex concurrently, synthesizes agreements,
 isolated points, and contradictions, and logs full telemetry.
 """
 
+# Tags: advisor, review, cost
+# Links: triad/advisor_manager.py, triad/triad_engine.py
+# Queries: "how do two advisors run at once", "how is a structured synthesis built", "what happens when both agree"
+
 import os
 import sys
 import re

@@ -1,4 +1,7 @@
 # Autonomous Triad v3.4: Unification and Upgrade Spec
+**Tags:** sync, engine, verification, review
+**Links:** docs/TRIAD_UPGRADE_SPEC.md, scripts/triad_unify_audit.py, docs/TRIAD_V34_MERGE_MAP.md
+**Queries:** "which spec wins when the two disagree", "what evidence backs the plan", "how do the two trees get unified"
 
 **Status:** Draft for Opus to finalize. Supersedes the consolidated brief of 2026-10-28. Amends [`TRIAD_UPGRADE_SPEC.md`](TRIAD_UPGRADE_SPEC.md); where the two disagree, this file wins.
 **Evidence:** Three audit passes and a live verification pass on the owner's PC on 2026-10-28 (repositories, git history and branches, both CI workflows, running processes, the llama-server API).

@@ -1,4 +1,7 @@
 # autonomous-triad: Upgrade Spec (v3.4)
+**Tags:** engine, review, triage, cost, verification
+**Links:** docs/TRIAD_V34_UNIFICATION_SPEC.md, triad/cli/review.py
+**Queries:** "what does v3.4 change about reviews", "how much are tokens meant to drop", "what is the phase order"
 
 **Repo:** `Dysfunction-Junction/autonomous-triad` @ `a978bf1`
 **Goal:** more speed and accuracy, a large cut in tokens per review, every agent participating in the lane it does best, and $0 incremental cost.

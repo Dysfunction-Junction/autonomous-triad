@@ -1,3 +1,7 @@
+# Tags: bench, tooling
+# Links: scripts/generate_cases_v2.py, triad/bench/cases_v1/
+# Queries: "how were the v1 bench cases generated", "why are there two case generators"
+
 import json
 from pathlib import Path
 

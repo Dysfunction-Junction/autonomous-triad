@@ -6,6 +6,10 @@ Unit tests use an injected fake subprocess runner and always run. The integratio
 real Docker daemon and is skipped when none is reachable; it proves the actual isolation properties.
 """
 
+# Tags: docker, verification, test-fixture
+# Links: triad/docker_runner.py
+# Queries: "how is the container-backed runner tested", "what mounts are asserted"
+
 import os
 import subprocess
 import sys

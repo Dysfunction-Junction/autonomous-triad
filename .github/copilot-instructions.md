@@ -1,3 +1,7 @@
 # Copilot Instructions - autonomous-triad
+**Tags:** ops-runbook, cli
+**Links:** AGENTS.md, README.md
+**Queries:** "what should an agent read first", "which execution protocol is the default"
+
 Always read and strictly adhere to `AGENTS.md` in the user home directory and memory at `~/.claude/projects/C--Users-micha/memory/MEMORY.md`.
 Default to Section 6 of AGENTS.md (Autonomous End-to-End Execution Protocol): surgical implementation, test verification (`python -m unittest`), triad advisor critique, structured git commit without secrets.

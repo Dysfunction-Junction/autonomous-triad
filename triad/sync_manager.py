@@ -9,6 +9,10 @@ Provides automated ecosystem synchronization across:
 5. Configuration & Advisors: Aligns advisors.json preserving custom registrations
 """
 
+# Tags: sync, ops-runbook
+# Links: triad/paths.py, triad/cli/sync.py
+# Queries: "what does a full sync install", "where do junctions point", "how are hooks installed across repos"
+
 from __future__ import annotations
 
 import os

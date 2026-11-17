@@ -5,6 +5,10 @@ Generates hardened benchmark test cases for autonomous-triad.
 - No keywords field (judge-based scoring).
 """
 
+# Tags: bench, tooling
+# Links: scripts/generate_cases.py, triad/bench/cases/
+# Queries: "what makes a hardened case", "which negative cases exist"
+
 import json
 from pathlib import Path
 

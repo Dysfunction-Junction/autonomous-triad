@@ -1,4 +1,7 @@
 # Hermes Handoff: Autonomous Triad Agent & RouteLLM Integration (2026-10-27)
+**Tags:** ops-runbook, agent, routing, local-llm
+**Links:** triad/agent/router.py, triad/agent/runtime.py, docs/ARCHITECTURE.md
+**Queries:** "when did the agent stop using ollama", "what does RouteLLM classify", "which advisor signed off"
 
 ## Milestone Achieved
 Implemented the autonomous zero-cost terminal agent (`triad agent` / `triad-agent`), migrated local inference completely from Ollama to `llama-server.exe` (:8080), integrated LMSYS RouteLLM difficulty classification with adaptive thresholding, and obtained full Advisory Council (Claude 3.7 Sonnet) pre-commit signoff.

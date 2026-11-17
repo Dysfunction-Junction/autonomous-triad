@@ -8,6 +8,10 @@ Usage:
   echo prompt | prw
 """
 
+# Tags: intent, cli
+# Links: triad/prompt_rewriter.py
+# Queries: "what does prw do", "how do I expand a rough prompt from the shell"
+
 from __future__ import annotations
 
 import argparse

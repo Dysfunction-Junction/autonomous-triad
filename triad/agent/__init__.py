@@ -5,6 +5,10 @@ Provides an interactive and single-shot autonomous coding agent with a 3-tier mo
 (Claude/Codex -> Nous Research Free -> Local llama-server).
 """
 
+# Tags: agent, routing, cost
+# Links: triad/agent/cli.py, triad/agent/router.py
+# Queries: "what is the agent waterfall", "which tiers are available with no spend"
+
 try:
     from triad.agent.cli import main as agent_main
 except ImportError:

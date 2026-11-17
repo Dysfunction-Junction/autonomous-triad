@@ -1,5 +1,9 @@
 """Git pre-commit hook management (`triad hook`)."""
 
+# Tags: cli, worktree, patching, verification
+# Links: triad/worktree.py, triad/cli/mesh.py
+# Queries: "how do I install the pre-commit hook", "what does the hook run", "how does self-healing apply a fix"
+
 import os
 import re
 import shutil

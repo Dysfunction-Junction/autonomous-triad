@@ -7,6 +7,10 @@ Provides an interactive REPL and non-interactive print mode matching 'agy' ergon
   triad agent -y              # Auto-approve tool modifications
 """
 
+# Tags: agent, cli
+# Links: triad/agent/runtime.py, bin/tr.cmd
+# Queries: "how do I start the agent REPL", "what does a single-shot run do"
+
 import os
 import sys
 import time

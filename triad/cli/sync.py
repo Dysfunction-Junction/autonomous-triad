@@ -1,5 +1,9 @@
 """Ecosystem synchronization CLI command (`triad sync`)."""
 
+# Tags: cli, sync, ops-runbook
+# Links: triad/sync_manager.py
+# Queries: "what does triad sync install", "how do I keep the live install from drifting"
+
 import json
 import sys
 

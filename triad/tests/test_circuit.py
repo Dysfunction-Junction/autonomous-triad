@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for the persistent advisor circuit breaker and auto-failover skips."""
 
+# Tags: advisor, failover, test-fixture
+# Links: triad/circuit.py
+# Queries: "when does the breaker open and close", "what is skipped while open"
+
 import json
 import os
 import tempfile

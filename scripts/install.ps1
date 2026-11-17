@@ -1,3 +1,7 @@
+# Tags: cli, tooling, ops-runbook
+# Links: bin/triad.ps1, triad/sync_manager.py
+# Queries: "how do I install triad on Windows", "where does install put the launchers"
+
 <#
 .SYNOPSIS
     Installs and links the Autonomous Multi-Agent Triad into the user's environment.

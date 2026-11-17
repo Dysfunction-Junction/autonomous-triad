@@ -1,3 +1,7 @@
+# Tags: agent, cli, ops-runbook
+# Links: triad/agent/cli.py, bin/triad.ps1
+# Queries: "how do I start the agent REPL on windows", "how does it resolve the repo"
+
 # PowerShell wrapper for the Triad agent REPL.
 # Resolution order: TRIAD_ROOT env -> repo checkout next to this script -> ~/.agents install
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)

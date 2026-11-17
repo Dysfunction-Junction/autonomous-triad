@@ -9,6 +9,10 @@ Zero-cost, ultra-fast intent classification and autonomous routing across:
 - System Health: Triad Doctor audit
 """
 
+# Tags: intent, routing, review
+# Links: triad/cli/review.py, triad/triad_engine.py, docs/ARCHITECTURE.md
+# Queries: "how is a prompt classified", "what makes a task high stakes", "when is it auto-adjudicated"
+
 import sys
 import re
 import subprocess

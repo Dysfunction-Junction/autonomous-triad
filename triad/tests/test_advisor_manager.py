@@ -9,6 +9,10 @@ Verifies:
 - Auto-failover logic across configured advisor priorities
 """
 
+# Tags: advisor, failover, test-fixture
+# Links: triad/advisor_manager.py
+# Queries: "what does the advisor manager guarantee", "which failover paths are covered"
+
 import os
 import sys
 import json

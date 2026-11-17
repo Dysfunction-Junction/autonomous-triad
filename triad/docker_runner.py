@@ -17,6 +17,10 @@ Profiles are argv lists from trusted configuration, never taken from a candidate
 the image, so use image-relative commands (``python``, not ``sys.executable``).
 """
 
+# Tags: docker, verification
+# Links: triad/morphogenetic.py, triad/bench/docker_harness.py
+# Queries: "how is a test run inside a container", "what limits does the container get"
+
 import os
 import shutil
 import subprocess

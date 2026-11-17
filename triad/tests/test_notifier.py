@@ -8,6 +8,10 @@ Verifies:
 - Status icon formatting
 """
 
+# Tags: notify, test-fixture
+# Links: triad/notifier.py
+# Queries: "what payload is sent to the phone", "how is a failed delivery handled"
+
 import json
 import os
 import unittest

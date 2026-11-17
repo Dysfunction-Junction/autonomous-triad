@@ -15,6 +15,11 @@ claims file itself become a real problem.
 decision ledger (plaintext JSONL) — the secrets warning in
 decision_log.py applies to council output here too.
 """
+
+# Tags: claims, ops-runbook
+# Links: triad/decision_log.py, AGENTS.md
+# Queries: "who is touching which path right now", "how do I claim paths before editing", "how do I release a claim"
+
 from __future__ import annotations
 
 import argparse

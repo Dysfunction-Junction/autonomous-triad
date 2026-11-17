@@ -9,6 +9,10 @@ Optional ``--llm`` mode can polish via the advisory council, but the default
 path is pure local / zero-cost.
 """
 
+# Tags: intent, review
+# Links: triad/intent_engine.py, triad/prw.py
+# Queries: "how is a rough prompt expanded", "what does the rewriter add before a review"
+
 from __future__ import annotations
 
 import json

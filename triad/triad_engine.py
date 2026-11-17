@@ -9,6 +9,10 @@ Unified Executive Orchestrator & Advisory Bridge:
 - 100% Zero-Incremental-Cost Policy: Flat-rate subscriptions only ($0 extra per-token billing)
 """
 
+# Tags: engine, cli, review, verification
+# Links: triad/advisor_manager.py, triad/intent_engine.py, bin/triad
+# Queries: "where is the command surface defined", "how does review dispatch to advisors", "what does the engine do with a gate result"
+
 import sys
 import os
 import stat

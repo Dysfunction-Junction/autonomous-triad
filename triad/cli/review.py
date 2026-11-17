@@ -1,5 +1,9 @@
 """Review, consult, debug, and Phase 3.6 triage CLI commands."""
 
+# Tags: cli, review, triage, advisor
+# Links: triad/intent_engine.py, triad/competition.py
+# Queries: "what review modes exist", "how do I consult an advisor from the shell", "what does triage decide"
+
 import os
 import re
 import sys

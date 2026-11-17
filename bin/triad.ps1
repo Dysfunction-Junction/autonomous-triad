@@ -1,3 +1,7 @@
+# Tags: cli, engine, ops-runbook
+# Links: triad/triad_engine.py, triad/paths.py
+# Queries: "how does the powershell launcher resolve the root", "what is the search order"
+
 # PowerShell wrapper for Triad CLI
 # Resolution order: TRIAD_ROOT env -> repo checkout next to this script -> ~/.agents install
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)

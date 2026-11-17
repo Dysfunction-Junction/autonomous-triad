@@ -25,6 +25,10 @@ Key Capabilities:
 - Logs per-instance outcomes and outputs the verified benchmark score.
 """
 
+# Tags: bench, docker, verification
+# Links: triad/bench/docker_harness.py, triad/bench/swebench_instances.json
+# Queries: "how is a SWE-bench instance checked out", "which instances are verified"
+
 import sys
 import os
 import re

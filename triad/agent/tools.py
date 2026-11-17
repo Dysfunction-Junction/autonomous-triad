@@ -8,6 +8,10 @@ Follows the agy/Claude Code permission model:
 - Workspace containment and secret leaks prevention are strictly enforced.
 """
 
+# Tags: agent, worktree
+# Links: triad/agent/runtime.py
+# Queries: "which workspace tools can the agent call", "what does the shell tool refuse to do"
+
 import os
 import re
 import json

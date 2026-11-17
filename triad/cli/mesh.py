@@ -1,5 +1,9 @@
 """Agent Mesh MCP coordination, status, and health supervision (`triad mesh`)."""
 
+# Tags: cli, mcp, protocol-contract
+# Links: triad/server.py, AGENTS.md
+# Queries: "how do I check mesh health", "which MCP servers are coordinated"
+
 import json
 import os
 import shutil

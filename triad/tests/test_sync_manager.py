@@ -14,6 +14,10 @@ Verifies:
 - Repos=[] handling
 """
 
+# Tags: sync, test-fixture
+# Links: triad/sync_manager.py
+# Queries: "what does a sync produce", "how are custom advisors preserved"
+
 import os
 import tempfile
 import unittest

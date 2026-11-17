@@ -6,6 +6,10 @@ runs only when ``TRIAD_ASTROPY_IMAGE`` names a prebuilt image. Candidate
 patches are untrusted: they must never fall back to host execution.
 """
 
+# Tags: bench, docker, verification
+# Links: triad/bench/swebench_runner.py, scripts/prepare_bench_env.py
+# Queries: "how is a repo-native test run in docker", "what is the cache key", "which mounts are allowed"
+
 from __future__ import annotations
 
 import os

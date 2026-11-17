@@ -9,6 +9,10 @@ calls, each up to `timeout` seconds — not sub-second.
 - Integrates into advisor_manager.py and advisors.json as the "nous" advisor.
 """
 
+# Tags: nous, routing, cost
+# Links: triad/advisor_manager.py, triad/cli/doctor.py
+# Queries: "which nous models are tried and in what order", "what is the per-model timeout", "when does the free cascade fall through"
+
 import sys
 import os
 import re

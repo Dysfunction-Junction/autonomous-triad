@@ -4,6 +4,9 @@ description: Autonomously consults Claude Code and OpenAI Codex (as Chief Archit
 ---
 
 # Autonomous Multi-Advisor Bridge (Claude Pro + OpenAI Codex)
+**Tags:** skills, advisor, ops-runbook
+**Links:** skills/claude-advisor/advisor.py
+**Queries:** "how does an agent load the advisor skill", "when should an agent consult an advisor"
 
 This skill enables Antigravity to consult Claude Code (`claude.exe`) and OpenAI Codex (`codex.exe`) as an autonomous advisory council without requiring user intervention. Both run on the user's existing subscriptions (Claude Pro and ChatGPT Plus/Team) with zero incremental API fees.
 

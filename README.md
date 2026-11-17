@@ -1,4 +1,7 @@
 # Autonomous Multi-Agent Triad (Antigravity ↔ Claude Code ↔ OpenAI Codex ↔ Hermes)
+**Tags:** engine, advisor, cli, routing, ops-runbook
+**Links:** triad/triad_engine.py, docs/ARCHITECTURE.md, bin/triad
+**Queries:** "what does the triad do", "which commands does the CLI expose", "how is zero incremental cost enforced"
 
 > **Autonomous multi-agent collaboration framework with zero incremental API cost, MCP-stripped advisory prompts, circuit-breaker failover, and an adversarial Red/Blue review arena.**
 

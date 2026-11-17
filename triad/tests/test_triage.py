@@ -1,5 +1,9 @@
 """Tests for Phase 3.6: deterministic docs/format pre-filter and local llama risk triage."""
 
+# Tags: triage, local-llm, test-fixture
+# Links: triad/cli/review.py
+# Queries: "which docs are pre-filtered", "how is local llama risk triage tested"
+
 from __future__ import annotations
 
 import os

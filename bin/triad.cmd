@@ -1,4 +1,9 @@
 @echo off
+
+@rem Tags: cli, engine, ops-runbook
+@rem Links: bin/triad.ps1, bin/triad
+@rem Queries: "how does the batch launcher find the engine", "what happens if TRIAD_ROOT is unset"
+
 setlocal
 set "ENGINE="
 if defined TRIAD_ROOT if exist "%TRIAD_ROOT%\triad\triad_engine.py" set "ENGINE=%TRIAD_ROOT%\triad\triad_engine.py"

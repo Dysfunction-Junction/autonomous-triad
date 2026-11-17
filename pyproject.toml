@@ -1,3 +1,7 @@
+# Tags: cli, ops-runbook
+# Links: triad/triad_engine.py, bin/triad
+# Queries: "which console scripts does the package install", "what are the runtime dependencies"
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"

@@ -11,6 +11,10 @@ script the Triad touches. Resolution order for each path:
 Nothing in this module may hardcode a specific user's home directory.
 """
 
+# Tags: ops-runbook, sync
+# Links: triad/sync_manager.py, AGENTS.md
+# Queries: "where does triad look for its install", "how is the repo root resolved", "where does ~/.agents come from"
+
 from __future__ import annotations
 
 import os

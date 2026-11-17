@@ -1,4 +1,7 @@
 # Hermes / Triad Engineering Handoff — 2026-10-03
+**Tags:** ops-runbook, sync
+**Links:** triad/paths.py, docs/ARCHITECTURE.md
+**Queries:** "what did the packaging and ctime merge change", "was the suite green when it landed"
 
 ## 1. Summary of Completed Merge
 - **Status:** **COMPLETE & INTEGRATED**

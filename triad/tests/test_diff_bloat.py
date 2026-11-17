@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for diff bloat stripping, marker anchoring, idempotency, and code/doc classification."""
 
+# Tags: patching, review, test-fixture
+# Links: triad/advisor_manager.py, triad/patching.py
+# Queries: "how is diff bloat stripped", "is stripping idempotent", "how are docs classified"
+
 from pathlib import Path
 import os
 import subprocess

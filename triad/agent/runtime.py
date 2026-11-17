@@ -6,6 +6,10 @@ Orchestrates multi-turn autonomous tool execution loops across the 3-tier zero-c
   Tier 3: Local llama-server (:8080)
 """
 
+# Tags: agent, routing, failover
+# Links: triad/agent/router.py, triad/agent/tools.py
+# Queries: "how does the waterfall fall through", "what happens when a tier is exhausted", "how is a turn executed"
+
 import os
 import re
 import json

@@ -6,6 +6,10 @@ Previously each module carried its own copy of these; this is the single
 implementation.
 """
 
+# Tags: ops-runbook, protocol-contract
+# Links: triad/advisor_manager.py, triad/server.py
+# Queries: "how is a subprocess timed out", "how is a port probed", "what happens when a binary is missing"
+
 from __future__ import annotations
 
 import os

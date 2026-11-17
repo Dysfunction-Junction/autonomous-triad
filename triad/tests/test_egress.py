@@ -1,5 +1,9 @@
 """Hermetic tests for pre-send egress redaction. No live model calls."""
 
+# Tags: egress, test-fixture
+# Links: triad/egress.py
+# Queries: "what is redacted before a send", "does this test make live model calls"
+
 from __future__ import annotations
 
 import tempfile

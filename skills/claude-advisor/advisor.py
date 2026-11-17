@@ -9,6 +9,10 @@ Autonomous non-interactive advisory queries with:
 - Recursive process-tree cleanup on timeout (kills child node.exe/codex processes)
 """
 
+# Tags: skills, advisor, failover, cost
+# Links: triad/advisor_manager.py, triad/competition.py, skills/claude-advisor/SKILL.md
+# Queries: "how does the bridge pick claude or codex", "what happens at the claude session limit", "how is the failover made free"
+
 import sys
 import subprocess
 import argparse
