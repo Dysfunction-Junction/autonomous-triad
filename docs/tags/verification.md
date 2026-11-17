@@ -1,6 +1,6 @@
 # Tag: `verification`
 
-[← index](../REPO_TAGS.md) · 24 files
+[← index](../REPO_TAGS.md) · 22 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -18,8 +18,6 @@
 | `triad/cli/hook.py` | `triad/worktree.py`<br>`triad/cli/mesh.py` | `how do I install the pre-commit hook`<br>`what does the hook run`<br>`how does self-healing apply a fix` |
 | `triad/docker_runner.py` | `triad/morphogenetic.py`<br>`triad/bench/docker_harness.py` | `how is a test run inside a container`<br>`what limits does the container get` |
 | `triad/morphogenetic.py` | `triad/docker_runner.py`<br>`triad/worktree.py` | `what does the morphogenetic engine rewrite`<br>`what gates guard a self-edit`<br>`how is a reproduction test required` |
-| `triad/patching.py` | `triad/worktree.py`<br>`triad/triad_engine.py` | `how is a patch applied and rolled back`<br>`what is a tree snapshot`<br>`how is the working tree fingerprinted` |
-| `triad/patching.py` | `triad/worktree.py`<br>`triad/triad_engine.py` | `how is a patch applied and rolled back`<br>`what is a tree snapshot`<br>`how is the working tree fingerprinted` |
 | `triad/patching.py` | `triad/worktree.py`<br>`triad/triad_engine.py` | `how is a patch applied and rolled back`<br>`what is a tree snapshot`<br>`how is the working tree fingerprinted` |
 | `triad/tests/__init__.py` | `pyproject.toml` | `how is the test suite run` |
 | `triad/tests/test_docker_harness.py` | `triad/bench/docker_harness.py` | `how is the harness cache key built`<br>`does this test start docker` |
