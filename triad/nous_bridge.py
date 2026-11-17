@@ -193,7 +193,7 @@ def query_nous(
     prompt: str,
     model: Optional[str] = None,
     mode: Optional[str] = None,
-    timeout: int = 25,
+    timeout: int = 45,
     budget_seconds: float = 100.0,  # wall-clock ceiling, stays under advisor_manager's 120s subprocess timeout
     *,
     task: Optional[str] = None,
