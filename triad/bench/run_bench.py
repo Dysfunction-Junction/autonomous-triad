@@ -5,6 +5,10 @@ Hardened Benchmark Harness for Autonomous Multi-Agent Triad.
 Uses model-as-a-judge scoring (replacing keyword matching) and negative controls.
 """
 
+# Tags: bench, verification, cost
+# Links: triad/bench/swebench_runner.py, triad/triad_engine.py
+# Queries: "how do I run the benchmark", "what counts as a pass", "how is cost reported"
+
 import sys
 import os
 import re

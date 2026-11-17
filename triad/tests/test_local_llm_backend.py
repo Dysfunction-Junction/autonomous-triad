@@ -4,6 +4,10 @@ Local advisor backend: llama.cpp (:8080, OpenAI /v1/chat/completions) by default
 EXOCORTEX_TRIAD_BACKEND=ollama restores the legacy `ollama run` subprocess on :11434.
 """
 
+# Tags: local-llm, advisor, test-fixture
+# Links: triad/advisor_manager.py, triad/nous_bridge.py
+# Queries: "which endpoint is the local backend", "is the local tier last in the cascade"
+
 import json
 import os
 import unittest

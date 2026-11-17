@@ -1,4 +1,8 @@
 # BLUEPRINT: The Autonomous Multi-Agent Triad
+**Tags:** advisor, review, failover, cost
+**Links:** docs/ARCHITECTURE.md, triad/competition.py, triad/circuit.py
+**Queries:** "what is the zero-token marginal cost design", "how does dual-advisor consensus work", "what is an ephemeral execution"
+
 ## Zero-Token Marginal Cost Architecture, Concurrent Dual-Advisor Consensus, and Hardened Ephemeral Execution
 
 *Author: Antigravity Executive Agent & Ecosystem Triad*  

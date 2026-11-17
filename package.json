@@ -5,6 +5,9 @@
   "description": "Autonomous Triad Advisory Council & Ephemeral Worktree Risk Gating",
   "scripts": {
     "test": "python -m pytest triad/tests -q",
-    "typecheck": "echo 'Python package - typecheck skipped'"
+    "typecheck": "echo 'Python package - typecheck skipped'",
+    "tags": "node scripts/repo-tags.mjs",
+    "tags:check": "node scripts/repo-tags.mjs --check",
+    "tags:audit": "node scripts/repo-tags.mjs --audit"
   }
 }

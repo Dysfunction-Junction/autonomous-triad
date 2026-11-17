@@ -15,6 +15,11 @@ first place.
 Basic first pass. Pivot later: SQLite index for fast --touches/--since
 queries once the log is large enough that linear scan is slow.
 """
+
+# Tags: ledger, ops-runbook
+# Links: AGENTS.md, triad/claims.py
+# Queries: "what was decided for this project and when", "how do I append a decision", "how do I read the last ten decisions"
+
 from __future__ import annotations
 
 import argparse

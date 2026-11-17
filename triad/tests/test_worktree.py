@@ -9,6 +9,10 @@ Verifies:
 - Context manager automatic cleanup and exception handling
 """
 
+# Tags: worktree, test-fixture
+# Links: triad/worktree.py
+# Queries: "how is isolation tested", "is cleanup asserted"
+
 import os
 import pytest
 import stat

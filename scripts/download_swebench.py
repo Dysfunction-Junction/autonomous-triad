@@ -1,3 +1,7 @@
+# Tags: bench, tooling
+# Links: triad/bench/swebench_instances.json, triad/bench/swebench_runner.py
+# Queries: "how do I refresh the SWE-bench instance list", "where does the benchmark data come from"
+
 import urllib.request
 import json
 from pathlib import Path

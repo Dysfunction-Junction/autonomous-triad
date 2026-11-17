@@ -17,6 +17,10 @@ Disable with ``TRIAD_CIRCUIT=0``. Override the state file with
 ``TRIAD_CIRCUIT_TIMEOUT_SECONDS`` (90).
 """
 
+# Tags: advisor, failover
+# Links: triad/advisor_manager.py
+# Queries: "when is an advisor marked unhealthy", "how long does the breaker stay open", "what does auto-failover skip"
+
 from __future__ import annotations
 
 import json

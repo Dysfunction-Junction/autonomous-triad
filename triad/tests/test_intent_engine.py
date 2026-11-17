@@ -1,5 +1,9 @@
 """Unit tests for Triad Intent Engine (intent_engine.py)."""
 
+# Tags: intent, routing, test-fixture
+# Links: triad/intent_engine.py
+# Queries: "which classifications are covered", "how are high-stakes prompts detected"
+
 import sys
 import tempfile
 import unittest

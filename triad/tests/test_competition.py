@@ -1,5 +1,9 @@
 """Unit tests for Competition Mode and structured synthesis."""
 
+# Tags: advisor, review, test-fixture
+# Links: triad/competition.py
+# Queries: "how is concurrent dual-advisor output synthesised", "what if one advisor fails"
+
 import sys
 import unittest
 from pathlib import Path

@@ -9,6 +9,10 @@ Verifies:
 - `--apply-verified` applies self-healing patches cleanly
 """
 
+# Tags: cli, worktree, verification, test-fixture
+# Links: triad/cli/hook.py, triad/worktree.py
+# Queries: "how is the pre-commit hook tested", "does the self-healing applicator close the loop"
+
 import argparse
 import pytest
 import io

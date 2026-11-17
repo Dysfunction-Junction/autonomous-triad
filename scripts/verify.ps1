@@ -1,3 +1,7 @@
+# Tags: verification, tooling, ops-runbook
+# Links: scripts/install.ps1, triad/cli/doctor.py
+# Queries: "how do I check the install is healthy", "what does verify run"
+
 <#
 .SYNOPSIS
     Runs automated verification of the Triad installation.

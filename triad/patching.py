@@ -1,5 +1,9 @@
 """Patch application, rollback, tree-snapshot, and working-tree fingerprinting."""
 
+# Tags: patching, worktree, verification
+# Links: triad/worktree.py, triad/triad_engine.py
+# Queries: "how is a patch applied and rolled back", "what is a tree snapshot", "how is the working tree fingerprinted"
+
 import contextlib
 import hashlib
 import os

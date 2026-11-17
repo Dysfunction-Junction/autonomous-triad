@@ -1,5 +1,9 @@
 """Tests for Phase 3.2/3.3: cited-hunk extraction, synthesis evidence trimming, unanimous-approval shortcut."""
 
+# Tags: review, advisor, test-fixture
+# Links: triad/competition.py
+# Queries: "how are cited hunks extracted", "what is trimmed from synthesis", "what counts as unanimous"
+
 from __future__ import annotations
 
 import os

@@ -1,4 +1,9 @@
 #!/usr/bin/env sh
+
+# Tags: cli, engine, ops-runbook
+# Links: triad/triad_engine.py, triad/paths.py
+# Queries: "how does the sh launcher find python", "where does it look for the repo root"
+
 # Portable Triad CLI wrapper
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 

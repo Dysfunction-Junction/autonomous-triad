@@ -1,4 +1,7 @@
 # Architectural Specification: Autonomous Multi-Agent Triad
+**Tags:** engine, advisor, protocol-contract, review
+**Links:** triad/triad_engine.py, triad/server.py, docs/BLUEPRINT.md
+**Queries:** "how do the advisors talk to each other", "what are the invariant rules", "how is a prompt classified"
 
 ## 1. System Topology & Communication
 

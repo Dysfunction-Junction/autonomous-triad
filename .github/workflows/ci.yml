@@ -1,3 +1,7 @@
+# Tags: ops-runbook, verification
+# Links: pyproject.toml, scripts/repo-tags.mjs
+# Queries: "what does CI run on a pull request", "is the tag gate enforced in CI"
+
 name: CI
 
 on:
@@ -48,3 +52,23 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+
+  # The tag index is generated from per-file headers, so it goes stale the moment a
+  # header is added or a file moves. This job is cheap and independent of the Python
+  # suite on purpose: it fails fast on a missing index regeneration, which is the
+  # mistake a human or agent actually makes.
+  tags:
+    name: Tag headers and index
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Node ships with the runner image; the tag scripts need nothing installed.
+      - name: Lint headers against the vocabulary
+        run: node scripts/repo-tags.mjs --audit
+
+      - name: Check the generated index is current
+        run: node scripts/repo-tags.mjs --check

@@ -16,6 +16,10 @@ References & Prior Art:
   Tier 3: Local Hardware (llama-server :8080 qwen3 / qwen2.5-coder) [Zero Cost Local]
 """
 
+# Tags: agent, routing, cost
+# Links: triad/agent/tracker.py, triad/agent/runtime.py
+# Queries: "how is a model chosen for this turn", "what is the adaptive threshold", "how is difficulty classified"
+
 import os
 import re
 from dataclasses import dataclass

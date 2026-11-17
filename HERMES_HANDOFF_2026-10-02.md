@@ -1,4 +1,7 @@
 # Hermes / Triad Engineering Handoff — 2026-10-02
+**Tags:** ops-runbook, failover, bench
+**Links:** triad/circuit.py, docs/ARCHITECTURE.md
+**Queries:** "what shipped in the circuit breaker and bench env work", "which branch landed it"
 
 ## 1. Summary of Completed Milestones
 - **Status:** **COMPLETE & VERIFIED**

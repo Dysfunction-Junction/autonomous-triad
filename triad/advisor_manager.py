@@ -8,6 +8,10 @@ Config-driven management and dynamic query routing for advisory models:
 - Allows dynamic registration of new advisors without modifying engine code.
 """
 
+# Tags: advisor, routing, failover, cost
+# Links: triad/advisors.json, triad/circuit.py, triad/triad_engine.py
+# Queries: "which advisor runs for this task", "how does the cascade order work", "what happens when an advisor is unhealthy", "how is a free tier preferred"
+
 import sys
 import os
 import re

@@ -3,6 +3,10 @@
 Unit tests for Nous Research Bridge (triad/nous_bridge.py).
 """
 
+# Tags: nous, test-fixture
+# Links: triad/nous_bridge.py
+# Queries: "which cascade order is asserted", "what happens on timeout"
+
 import unittest
 from unittest.mock import patch, MagicMock
 import json

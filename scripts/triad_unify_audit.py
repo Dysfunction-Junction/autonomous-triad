@@ -4,6 +4,10 @@ Writes docs/TRIAD_V34_MERGE_MAP.md and prints a JSON summary. Read-only apart fr
 Override checkout locations with TRIAD_A and TRIAD_EXO.
 """
 
+# Tags: sync, verification, tooling
+# Links: docs/TRIAD_V34_MERGE_MAP.md, triad/sync_manager.py
+# Queries: "does the vendored copy match this tree", "what drifts between triad and packages/triad"
+
 import ast
 import hashlib
 import json

@@ -1,5 +1,9 @@
 """Unit tests for Triad Agent, RouteLLM Router, Quota Tracker, and Tools."""
 
+# Tags: agent, routing, cost, test-fixture
+# Links: triad/agent/router.py, triad/agent/runtime.py
+# Queries: "how is routing tested", "is quota tracking covered"
+
 import tempfile
 from pathlib import Path
 

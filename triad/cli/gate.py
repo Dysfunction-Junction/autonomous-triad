@@ -1,5 +1,9 @@
 """Ground-truth verification gate (`triad gate`)."""
 
+# Tags: cli, verification, notify, review
+# Links: triad/notifier.py, triad/competition.py
+# Queries: "what does the ground-truth gate verify", "when is a phone notified", "what blocks a commit"
+
 import ast
 import json
 import os

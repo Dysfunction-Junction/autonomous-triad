@@ -5,6 +5,10 @@ Connects autonomous Triad event completions to Bear House Classic push alerts
 (targeting user's Galaxy S26 Ultra via /api/triad-notify or /api/notify-person).
 """
 
+# Tags: notify, protocol-contract
+# Links: triad/cli/gate.py, triad/triad_engine.py
+# Queries: "how does a phone get notified", "what payload does the device receive"
+
 import json
 import os
 import threading

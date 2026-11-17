@@ -11,6 +11,10 @@ Transforms software from brittle static source code into an evolving digital org
 5. Zero-Downtime Hot Splicing: Generates verified two-phase patch for live promotion.
 """
 
+# Tags: morphogenetic, patching, verification
+# Links: triad/docker_runner.py, triad/worktree.py
+# Queries: "what does the morphogenetic engine rewrite", "what gates guard a self-edit", "how is a reproduction test required"
+
 import sys
 import os
 import difflib

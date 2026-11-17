@@ -5,6 +5,10 @@ Clones astropy and django, confirms every base commit is present, and writes
 triad/bench/.cache/ENV_READY.json. Does not query advisors and does not run tests.
 """
 
+# Tags: bench, docker, tooling
+# Links: triad/bench/docker_harness.py, triad/bench/swebench_runner.py
+# Queries: "how is the benchmark environment pinned", "which instances are in the slice"
+
 from __future__ import annotations
 
 import hashlib

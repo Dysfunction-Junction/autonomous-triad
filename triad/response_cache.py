@@ -1,5 +1,9 @@
 """Content-addressed response cache for Triad advisor and synthesis calls."""
 
+# Tags: cache, cost
+# Links: triad/advisor_manager.py, triad/cli/doctor.py
+# Queries: "how is a model response cached", "what makes a cache key", "what does a cache hit save"
+
 from __future__ import annotations
 
 import hashlib

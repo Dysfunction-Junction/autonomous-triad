@@ -1,4 +1,7 @@
 # Agent index
+**Tags:** ops-runbook, protocol-contract, sync, advisor
+**Links:** README.md, docs/ARCHITECTURE.md, triad/advisors.json
+**Queries:** "which checkout is canonical for triad", "how does packages/triad relate to this repo", "which port does triad listen on"
 
 This file is a map. It names checkouts, ports, and the file to open. It does not describe behavior. If a line here and the code disagree, the code wins; then correct this file's path or port.
 

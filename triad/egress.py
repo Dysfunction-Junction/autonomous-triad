@@ -1,5 +1,9 @@
 """Last-mile cloud disclosure controls. No network or credential loading here."""
 
+# Tags: egress, protocol-contract
+# Links: triad/advisor_manager.py, triad/nous_bridge.py
+# Queries: "what is stripped before a cloud call", "which secrets never leave the machine", "what does the redaction cover"
+
 import fnmatch
 import os
 import re

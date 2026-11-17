@@ -10,6 +10,10 @@ Tests:
 - CORS header verification
 """
 
+# Tags: server, protocol-contract, test-fixture
+# Links: triad/server.py
+# Queries: "which routes are covered", "how is the daemon started in tests"
+
 import json
 import time
 import socket

@@ -1,5 +1,9 @@
 """Unit tests for Triad Prompt Rewriter (prompt_rewriter.py)."""
 
+# Tags: intent, review, test-fixture
+# Links: triad/prompt_rewriter.py
+# Queries: "what does the rewriter add", "are short prompts expanded"
+
 import json
 import sys
 import unittest

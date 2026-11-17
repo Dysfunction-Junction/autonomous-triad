@@ -5,6 +5,10 @@ Maintains a local append-only ledger in ~/.triad/usage_ledger.json to calculate 
 utilization and proactively shed load before hitting hard provider rate limits.
 """
 
+# Tags: agent, cost
+# Links: triad/agent/router.py
+# Queries: "how is the quota window tracked", "when does a tier count as used up"
+
 import contextlib
 import json
 import os

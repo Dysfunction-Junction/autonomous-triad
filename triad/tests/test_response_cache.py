@@ -1,5 +1,9 @@
 """Tests for triad.response_cache and gate Python resolution."""
 
+# Tags: cache, test-fixture
+# Links: triad/response_cache.py
+# Queries: "how is a cache key shaped", "how is python resolution handled"
+
 from __future__ import annotations
 
 import json

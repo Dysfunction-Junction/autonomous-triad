@@ -7,6 +7,10 @@ Provides high-reliability ephemeral git worktree lifecycle management on Windows
 - isolated_worktree: safe context manager ensuring automatic rollback & cleanup
 """
 
+# Tags: worktree, patching, verification
+# Links: triad/patching.py, triad/cli/hook.py
+# Queries: "how is an ephemeral worktree created", "who cleans it up", "why isolate rather than edit in place"
+
 import sys
 import os
 import re

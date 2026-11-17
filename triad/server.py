@@ -9,6 +9,10 @@ Provides high-availability, zero-token-rent HTTP daemon for:
 - /review: Dual-advisor diff review & consensus synthesis
 """
 
+# Tags: server, protocol-contract, advisor
+# Links: triad/triad_engine.py, triad/intent_engine.py, AGENTS.md
+# Queries: "which port does the daemon listen on", "which routes does it expose", "how does a phone or mesh call it"
+
 import sys
 import os
 import subprocess

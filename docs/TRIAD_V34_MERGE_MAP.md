@@ -1,4 +1,7 @@
 # Triad v3.4 merge map (generated)
+**Tags:** sync, verification, protocol-contract
+**Links:** scripts/triad_unify_audit.py, docs/TRIAD_V34_UNIFICATION_SPEC.md
+**Queries:** "which files diverge between triad and packages/triad", "how is this file regenerated"
 
 Generated 2026-10-28 21:34 by `scripts/triad_unify_audit.py` from `autonomous-triad@762e2c3` (side **A**) and `sovereign-exocortex@ea4a645` (main) `packages/triad` (side **B**). Tracked files only, CRLF normalized to LF. Regenerate before acting.
 

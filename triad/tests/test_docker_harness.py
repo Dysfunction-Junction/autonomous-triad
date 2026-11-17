@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Cache-key and repo-native command tests. These do not start Docker."""
 
+# Tags: bench, docker, verification, test-fixture
+# Links: triad/bench/docker_harness.py
+# Queries: "how is the harness cache key built", "does this test start docker"
+
 import os
 import subprocess
 import tempfile

@@ -1,5 +1,9 @@
 """Gates added in row 2.4: default-off flag, diff-size cap, reproduction test."""
 
+# Tags: morphogenetic, docker, verification, test-fixture
+# Links: triad/morphogenetic.py, triad/docker_runner.py
+# Queries: "is the engine flag default off", "what is the diff-size cap", "is a reproduction test required"
+
 import os
 import pytest
 import shutil

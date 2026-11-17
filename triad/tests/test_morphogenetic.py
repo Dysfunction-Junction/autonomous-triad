@@ -3,6 +3,10 @@
 Unit tests for Frontier 3 Morphogenetic Software Engine (test_morphogenetic.py).
 """
 
+# Tags: morphogenetic, test-fixture
+# Links: triad/morphogenetic.py
+# Queries: "what does the engine rewrite", "which gates are exercised"
+
 import sys
 import pytest
 import unittest
