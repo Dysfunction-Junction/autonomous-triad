@@ -31,8 +31,17 @@ from triad.worktree import (
     prune_worktrees,
     WarmWorktreePool,
 )
+from triad.tests._isolated_repo import isolated_repo_root
 
-REPO_ROOT = get_repo_root(Path(__file__).resolve())
+# A throwaway repository, not the developer's checkout: worktrees inherit their parent's
+# hooks, so running these against the real repo fired the installed pre-commit gate on
+# every commit the tests made (11 minutes per commit here, instant on CI).
+REPO_ROOT = isolated_repo_root()
+
+# The end-to-end cmd_auto --worktree case resolves its own repo from the process cwd and
+# materializes a candidate tree from the live checkout, so it needs the real tree to pair
+# with; pinning its parent state from the throwaway repo was what broke it.
+REAL_REPO_ROOT = get_repo_root(Path(__file__).resolve())
 
 
 class TestGitWorktreeIsolation(unittest.TestCase):
@@ -357,14 +366,14 @@ class TestGitWorktreeIsolation(unittest.TestCase):
         # trip the (correct) concurrent-modification guard. Pin the parent state so the test only
         # asserts worktree setup/teardown.
         from triad.triad_engine import capture_parent_state
-        pinned = capture_parent_state(REPO_ROOT)
+        pinned = capture_parent_state(REAL_REPO_ROOT)
+        before = len(list_worktrees(REAL_REPO_ROOT))
 
         with patch("sys.stdout", new=io.StringIO()):
             with patch("triad.triad_engine.capture_parent_state", return_value=pinned):
                 cmd_auto(args)
 
-        current_worktrees = list_worktrees(REPO_ROOT)
-        self.assertEqual(len(current_worktrees), self.initial_count)
+        self.assertEqual(len(list_worktrees(REAL_REPO_ROOT)), before)
 
     def test_cmd_gate_with_worktree_flag(self):
         """Verify cmd_gate --worktree executes pre-commit gate in ephemeral worktree and cleans up."""

@@ -1,12 +1,12 @@
 # Repository tag index
 
 > Generated view — do not edit. Regenerate with `node scripts/repo-tags.mjs`.
-> Source: `git ls-files` · branch `master` · commit `d224e92` · 97 tracked files.
+> Source: `git ls-files` · branch `test/isolated-repo-fixture` · commit `43f4cfd` · 98 tracked files.
 >
 > `Tags/Links/Queries` is the header written at the top of each file. This file is the map;
 > the headers are the body. Both move together in the same commit.
 
-**Coverage:** 96 / 97 files carry a tag header (99.0%). 1 untagged.
+**Coverage:** 97 / 98 files carry a tag header (99.0%). 1 untagged.
 
 ## How to read this
 
@@ -94,6 +94,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/server.py` | `server`<br>`protocol-contract`<br>`advisor` | `triad/triad_engine.py`<br>`triad/intent_engine.py`<br>`AGENTS.md` |
 | `triad/sync_manager.py` | `sync`<br>`ops-runbook` | `triad/paths.py`<br>`triad/cli/sync.py` |
 | `triad/tests/__init__.py` | `test-fixture`<br>`verification` | `pyproject.toml` |
+| `triad/tests/_isolated_repo.py` | `test-fixture`<br>`worktree` | `triad/tests/test_worktree.py`<br>`triad/worktree.py` |
 | `triad/tests/test_advisor_manager.py` | `advisor`<br>`failover`<br>`test-fixture` | `triad/advisor_manager.py` |
 | `triad/tests/test_agent.py` | `agent`<br>`routing`<br>`cost`<br>`test-fixture` | `triad/agent/router.py`<br>`triad/agent/runtime.py` |
 | `triad/tests/test_circuit.py` | `advisor`<br>`failover`<br>`test-fixture` | `triad/circuit.py` |
@@ -153,11 +154,11 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `server` | 2 | [tags/server.md](tags/server.md) |
 | `skills` | 2 | [tags/skills.md](tags/skills.md) |
 | `sync` | 9 | [tags/sync.md](tags/sync.md) |
-| `test-fixture` | 24 | [tags/test-fixture.md](tags/test-fixture.md) |
+| `test-fixture` | 25 | [tags/test-fixture.md](tags/test-fixture.md) |
 | `tooling` | 9 | [tags/tooling.md](tags/tooling.md) |
 | `triage` | 3 | [tags/triage.md](tags/triage.md) |
 | `verification` | 27 | [tags/verification.md](tags/verification.md) |
-| `worktree` | 6 | [tags/worktree.md](tags/worktree.md) |
+| `worktree` | 7 | [tags/worktree.md](tags/worktree.md) |
 
 ## Backfill backlog
 

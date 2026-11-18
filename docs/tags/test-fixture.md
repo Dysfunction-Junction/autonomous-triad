@@ -1,10 +1,11 @@
 # Tag: `test-fixture`
 
-[← index](../REPO_TAGS.md) · 24 files
+[← index](../REPO_TAGS.md) · 25 files
 
 | File | Links | Queries |
 | --- | --- | --- |
 | `triad/tests/__init__.py` | `pyproject.toml` | `how is the test suite run` |
+| `triad/tests/_isolated_repo.py` | `triad/tests/test_worktree.py`<br>`triad/worktree.py` | `which repository do worktree tests run against`<br>`why do the tests use a throwaway git repo`<br>`how are test worktrees kept off the developer checkout` |
 | `triad/tests/test_advisor_manager.py` | `triad/advisor_manager.py` | `what does the advisor manager guarantee`<br>`which failover paths are covered` |
 | `triad/tests/test_agent.py` | `triad/agent/router.py`<br>`triad/agent/runtime.py` | `how is routing tested`<br>`is quota tracking covered` |
 | `triad/tests/test_circuit.py` | `triad/circuit.py` | `when does the breaker open and close`<br>`what is skipped while open` |
