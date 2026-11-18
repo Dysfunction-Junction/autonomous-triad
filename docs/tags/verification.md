@@ -1,6 +1,6 @@
 # Tag: `verification`
 
-[← index](../REPO_TAGS.md) · 27 files
+[← index](../REPO_TAGS.md) · 26 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -23,7 +23,6 @@
 | `triad/tests/__init__.py` | `pyproject.toml` | `how is the test suite run` |
 | `triad/tests/test_docker_harness.py` | `triad/bench/docker_harness.py` | `how is the harness cache key built`<br>`does this test start docker` |
 | `triad/tests/test_docker_runner.py` | `triad/docker_runner.py` | `how is the container-backed runner tested`<br>`what mounts are asserted` |
-| `triad/tests/test_hook.py` | `triad/cli/hook.py`<br>`triad/worktree.py` | `how is the pre-commit hook tested`<br>`does the self-healing applicator close the loop` |
 | `triad/tests/test_morpho_sh0.py` | `triad/morpho.py`<br>`triad/morphogenetic.py`<br>`triad/ts_verify/__init__.py` | `how are SH-0 gates and TypeScript verification tested` |
 | `triad/tests/test_morphogenetic_gates.py` | `triad/morphogenetic.py`<br>`triad/docker_runner.py` | `is the engine flag default off`<br>`what is the diff-size cap`<br>`is a reproduction test required` |
 | `triad/triad_engine.py` | `triad/advisor_manager.py`<br>`triad/intent_engine.py`<br>`bin/triad` | `where is the command surface defined`<br>`how does review dispatch to advisors`<br>`what does the engine do with a gate result` |

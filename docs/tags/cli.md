@@ -1,6 +1,6 @@
 # Tag: `cli`
 
-[← index](../REPO_TAGS.md) · 21 files
+[← index](../REPO_TAGS.md) · 20 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -23,5 +23,4 @@
 | `triad/cli/review.py` | `triad/intent_engine.py`<br>`triad/competition.py` | `what review modes exist`<br>`how do I consult an advisor from the shell`<br>`what does triage decide` |
 | `triad/cli/sync.py` | `triad/sync_manager.py` | `what does triad sync install`<br>`how do I keep the live install from drifting` |
 | `triad/prw.py` | `triad/prompt_rewriter.py` | `what does prw do`<br>`how do I expand a rough prompt from the shell` |
-| `triad/tests/test_hook.py` | `triad/cli/hook.py`<br>`triad/worktree.py` | `how is the pre-commit hook tested`<br>`does the self-healing applicator close the loop` |
 | `triad/triad_engine.py` | `triad/advisor_manager.py`<br>`triad/intent_engine.py`<br>`bin/triad` | `where is the command surface defined`<br>`how does review dispatch to advisors`<br>`what does the engine do with a gate result` |

@@ -1,12 +1,12 @@
 # Repository tag index
 
 > Generated view — do not edit. Regenerate with `node scripts/repo-tags.mjs`.
-> Source: `git ls-files` · branch `test/isolated-repo-fixture` · commit `43f4cfd` · 98 tracked files.
+> Source: `git ls-files` · branch `cursor/claims-hook-readme-sync-0a63` · commit `180d699` · 99 tracked files.
 >
 > `Tags/Links/Queries` is the header written at the top of each file. This file is the map;
 > the headers are the body. Both move together in the same commit.
 
-**Coverage:** 97 / 98 files carry a tag header (99.0%). 1 untagged.
+**Coverage:** 97 / 99 files carry a tag header (98.0%). 2 untagged.
 
 ## How to read this
 
@@ -98,12 +98,12 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/tests/test_advisor_manager.py` | `advisor`<br>`failover`<br>`test-fixture` | `triad/advisor_manager.py` |
 | `triad/tests/test_agent.py` | `agent`<br>`routing`<br>`cost`<br>`test-fixture` | `triad/agent/router.py`<br>`triad/agent/runtime.py` |
 | `triad/tests/test_circuit.py` | `advisor`<br>`failover`<br>`test-fixture` | `triad/circuit.py` |
+| `triad/tests/test_claims.py` | `claims`<br>`test-fixture` | `triad/claims.py` |
 | `triad/tests/test_competition.py` | `advisor`<br>`review`<br>`test-fixture` | `triad/competition.py` |
 | `triad/tests/test_diff_bloat.py` | `patching`<br>`review`<br>`test-fixture` | `triad/advisor_manager.py`<br>`triad/patching.py` |
 | `triad/tests/test_docker_harness.py` | `bench`<br>`docker`<br>`verification`<br>`test-fixture` | `triad/bench/docker_harness.py` |
 | `triad/tests/test_docker_runner.py` | `docker`<br>`verification`<br>`test-fixture` | `triad/docker_runner.py` |
 | `triad/tests/test_egress.py` | `egress`<br>`test-fixture` | `triad/egress.py` |
-| `triad/tests/test_hook.py` | `cli`<br>`worktree`<br>`verification`<br>`test-fixture` | `triad/cli/hook.py`<br>`triad/worktree.py` |
 | `triad/tests/test_intent_engine.py` | `intent`<br>`routing`<br>`test-fixture` | `triad/intent_engine.py` |
 | `triad/tests/test_local_llm_backend.py` | `local-llm`<br>`advisor`<br>`test-fixture` | `triad/advisor_manager.py`<br>`triad/nous_bridge.py` |
 | `triad/tests/test_morpho_sh0.py` | `morphogenetic`<br>`verification`<br>`test-fixture` | `triad/morpho.py`<br>`triad/morphogenetic.py`<br>`triad/ts_verify/__init__.py` |
@@ -132,8 +132,8 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `agent` | 10 | [tags/agent.md](tags/agent.md) |
 | `bench` | 10 | [tags/bench.md](tags/bench.md) |
 | `cache` | 2 | [tags/cache.md](tags/cache.md) |
-| `claims` | 1 | [tags/claims.md](tags/claims.md) |
-| `cli` | 21 | [tags/cli.md](tags/cli.md) |
+| `claims` | 2 | [tags/claims.md](tags/claims.md) |
+| `cli` | 20 | [tags/cli.md](tags/cli.md) |
 | `cost` | 13 | [tags/cost.md](tags/cost.md) |
 | `docker` | 10 | [tags/docker.md](tags/docker.md) |
 | `egress` | 2 | [tags/egress.md](tags/egress.md) |
@@ -157,8 +157,8 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `test-fixture` | 25 | [tags/test-fixture.md](tags/test-fixture.md) |
 | `tooling` | 9 | [tags/tooling.md](tags/tooling.md) |
 | `triage` | 3 | [tags/triage.md](tags/triage.md) |
-| `verification` | 27 | [tags/verification.md](tags/verification.md) |
-| `worktree` | 7 | [tags/worktree.md](tags/worktree.md) |
+| `verification` | 26 | [tags/verification.md](tags/verification.md) |
+| `worktree` | 6 | [tags/worktree.md](tags/worktree.md) |
 
 ## Backfill backlog
 
@@ -167,3 +167,4 @@ Untagged files per area, largest first. Tag the areas you actually query.
 | Area | Untagged files |
 | --- | --- |
 | `triad/protected_paths.txt` | 1 |
+| `triad/tests` | 1 |
