@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Tags: morphogenetic, patching, verification
+# Links: triad/docker_runner.py, triad/worktree.py
+# Queries: "what does the morphogenetic engine rewrite", "what gates guard a self-edit", "how is a reproduction test required"
 """
 morphogenetic.py
 Frontier 3 of the Magic Piece: Morphogenetic Software Engine (Immortal Self-Healing).
@@ -10,10 +13,6 @@ Transforms software from brittle static source code into an evolving digital org
 4. Apoptosis: Instant purging of failing mutations.
 5. Zero-Downtime Hot Splicing: Generates verified two-phase patch for live promotion.
 """
-
-# Tags: morphogenetic, patching, verification
-# Links: triad/docker_runner.py, triad/worktree.py
-# Queries: "what does the morphogenetic engine rewrite", "what gates guard a self-edit", "how is a reproduction test required"
 
 import sys
 import os
@@ -64,6 +63,47 @@ def _scan_gate_from_env() -> bool:
     return os.environ.get(SCAN_GATE_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
 
 
+PROTECTED_PATHS_FILE = Path(__file__).resolve().parent / "protected_paths.txt"
+
+# Cached (entry, is_dir) pairs from PROTECTED_PATHS_FILE, casefolded POSIX form.
+# A test hook may reset this to None to force a reload.
+_protected_paths_cache: Optional[tuple] = None
+
+
+def _load_protected_paths() -> tuple:
+    """Read the versioned SH-0 protected-paths list (D12). Missing file: no extra paths."""
+    global _protected_paths_cache
+    if _protected_paths_cache is not None:
+        return _protected_paths_cache
+    entries: List[tuple] = []
+    try:
+        text = PROTECTED_PATHS_FILE.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("protected_paths.txt unreadable (%s): no SH-0 safety paths loaded", e)
+        _protected_paths_cache = ()
+        return _protected_paths_cache
+    for raw in text.splitlines():
+        line = raw.strip().replace("\\", "/")
+        if not line or line.startswith("#"):
+            continue
+        while line.startswith("./"):
+            line = line[3:]
+        line = line.lstrip("/")
+        if not line or line in ("", "/"):
+            continue
+        is_dir = line.endswith("/")
+        norm = line.casefold()
+        entries.append((norm, is_dir))
+    _protected_paths_cache = tuple(entries)
+    return _protected_paths_cache
+
+
+def _reset_protected_paths_cache() -> None:
+    """Test hook: force the next _load_protected_paths() to re-read the file."""
+    global _protected_paths_cache
+    _protected_paths_cache = None
+
+
 def changed_line_count(before: str, after: str) -> int:
     """Lines removed plus lines added (a one-line edit counts as 2)."""
     a = before.replace("\r\n", "\n").splitlines()
@@ -94,6 +134,9 @@ class MutationCandidate:
     unified_diff: str = ""
     survival_passed: bool = False
     verification_output: str = ""
+    # Structured SH-0 gate record, in run order: [{"gate", "passed", "detail"}].
+    # Gates that never ran (reproduction off, scan off, early rejection) are absent.
+    gates: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class VerificationRunner(Protocol):
@@ -296,11 +339,12 @@ class MorphogeneticEngine:
         return True, ""
 
     def _is_protected_target(self, root: Path, target: Path) -> bool:
-        """Policy on the canonical (resolved) path: tests, CI/harness config and invariants are immutable."""
+        """Policy on the canonical (resolved) path: tests, CI/harness config, invariants,
+        and the SH-0 safety paths from protected_paths.txt are immutable."""
         rel = target.relative_to(root.resolve())
         parts = tuple(part.casefold() for part in rel.parts)
         name = parts[-1]
-        return (
+        if (
             name in self._HARNESS_CONFIG_NAMES
             or name.startswith(self._HARNESS_CONFIG_PREFIXES)
             or any(part in {"test", "tests", "__tests__", ".github", ".git"} for part in parts)
@@ -314,7 +358,36 @@ class MorphogeneticEngine:
                     ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
                 )
             )
-        )
+        ):
+            return True
+        return self._is_sh0_protected_path(rel)
+
+    @staticmethod
+    def _is_sh0_protected_path(rel: Path) -> bool:
+        """SH-0 safety paths (D12) from protected_paths.txt, matched on the canonical rel path.
+
+        Entries with a "/" are repo-relative: a file entry matches exactly, a directory
+        entry (trailing "/") matches the directory itself and everything under it.
+        A bare single-component directory entry (e.g. "migrations/") matches any path
+        component with that name. All matching is case-insensitive (fail closed).
+        """
+        rel_posix = rel.as_posix().casefold()
+        parts = tuple(part.casefold() for part in rel.parts)
+        name = parts[-1] if parts else ""
+        for entry, is_dir in _load_protected_paths():
+            stripped = entry.rstrip("/")
+            if "/" in stripped:
+                if is_dir:
+                    if rel_posix == stripped or rel_posix.startswith(entry):
+                        return True
+                elif rel_posix == stripped:
+                    return True
+            elif is_dir:
+                if stripped in parts:
+                    return True
+            elif name == stripped:
+                return True
+        return False
 
     def evaluate_mutation_in_sandbox(
         self,
@@ -335,21 +408,31 @@ class MorphogeneticEngine:
         candidate.survival_passed = False
         candidate.unified_diff = ""
         candidate.verification_output = ""
+        candidate.gates = []
+
+        def record(gate: str, passed: bool, detail: str = "") -> None:
+            candidate.gates.append({"gate": gate, "passed": bool(passed), "detail": detail[:300]})
 
         if not self.enabled:
             candidate.verification_output = f"Darwinian Rejection: morphogenetic engine is disabled (set {ENABLE_ENV}=1)"
+            record("enabled", False, f"{ENABLE_ENV} not set")
             return False
+        record("enabled", True, f"{ENABLE_ENV} set")
 
         # Fail closed: without an isolated runner nothing derived from a candidate is ever executed.
         if self.verification_runner is None:
             candidate.verification_output = "Darwinian Rejection: isolated verification runner unavailable"
+            record("runner", False, "no verification runner")
             return False
+        record("runner", True, type(self.verification_runner).__name__)
 
         # Cheap input screening first: no worktree is created for a spelling we would never accept.
         bad_input = self._validate_rel_input(candidate.target_file)
         if bad_input:
             candidate.verification_output = f"Darwinian Rejection: invalid target ({bad_input}): {candidate.target_file!r}"
+            record("target_input", False, bad_input)
             return False
+        record("target_input", True, candidate.target_file)
 
         try:
             with isolated_worktree(
@@ -369,7 +452,9 @@ class MorphogeneticEngine:
                 # Path containment & file existence guard
                 if err or not target_file_path:
                     candidate.verification_output = f"Darwinian Rejection: target {err}"
+                    record("target_resolve", False, err or "unresolvable")
                     return False
+                record("target_resolve", True, candidate.target_file)
 
                 # Protected files check on the canonical path: Never allow mutations to test suites,
                 # harnesses, or invariants, however the input spelled them (aliases, "..", case).
@@ -377,12 +462,16 @@ class MorphogeneticEngine:
                     sandbox, sandbox / candidate.target_file
                 ):
                     candidate.verification_output = f"Darwinian Rejection: target file is protected from mutation: {candidate.target_file}"
+                    record("protected", False, candidate.target_file)
                     return False
+                record("protected", True, candidate.target_file)
 
                 # Links can alias a protected file or redirect the write: refuse them outright.
                 if self._has_link_component(sandbox, candidate.target_file):
                     candidate.verification_output = f"Darwinian Rejection: target path contains a symlink or junction: {candidate.target_file}"
+                    record("symlink", False, candidate.target_file)
                     return False
+                record("symlink", True, "no link components")
 
                 # 1. Apply mutation in the ephemeral sandbox
                 original_content = target_file_path.read_text(encoding="utf-8")
@@ -393,7 +482,9 @@ class MorphogeneticEngine:
                 mut_norm = candidate.mutated_code.replace("\r\n", "\n")
                 if mut_norm == orig_norm:
                     candidate.verification_output = "Darwinian Rejection: mutation is a no-op"
+                    record("noop", False, "mutated code equals original")
                     return False
+                record("noop", True, "mutation differs from original")
 
                 # Diff-size cap: a repair is a small, surgical change. Checked before anything runs.
                 orig_lines = orig_norm.count("\n") + 1
@@ -407,27 +498,34 @@ class MorphogeneticEngine:
                     candidate.verification_output = (
                         f"Darwinian Rejection: mutation changes {changed}+ lines (cap {self.max_changed_lines})"
                     )
+                    record("diff_cap", False, f"{changed}+ lines over cap {self.max_changed_lines}")
                     return False
+                record("diff_cap", True, f"{changed} changed lines within cap {self.max_changed_lines}")
 
                 # Reproduction gate: the failing test must fail on the unpatched base. A test that already
                 # passes proves nothing about the repair.
                 if self.require_reproduction:
                     if not reproduction_profile:
                         candidate.verification_output = "Darwinian Rejection: a reproduction test profile is required"
+                        record("reproduction", False, "no reproduction profile given")
                         return False
                     try:
                         repro = self.verification_runner.run(workspace=sandbox, profile=reproduction_profile, timeout=120)
                     except subprocess.TimeoutExpired:
                         candidate.verification_output = "Darwinian Rejection: reproduction run timed out"
+                        record("reproduction", False, f"{reproduction_profile} timed out on base")
                         return False
                     except OutputLimitExceeded:
                         candidate.verification_output = "Darwinian Rejection: reproduction output exceeded the host limit"
+                        record("reproduction", False, f"{reproduction_profile} output exceeded host limit")
                         return False
                     if repro.returncode == 0:
                         candidate.verification_output = (
                             "Darwinian Rejection: reproduction test passes before the patch (it does not reproduce the failure)"
                         )
+                        record("reproduction", False, f"{reproduction_profile} passes on base (exit 0)")
                         return False
+                    record("reproduction", True, f"{reproduction_profile} fails on base (exit {repro.returncode})")
                     repro_pointer = git_pointer.read_bytes() if git_pointer.is_file() else None
                     repro_status = subprocess.run(
                         ["git", "status", "--porcelain", "--untracked-files=all"],
@@ -435,7 +533,9 @@ class MorphogeneticEngine:
                     )
                     if pointer_before is None or repro_pointer != pointer_before or repro_status.returncode != 0 or repro_status.stdout.strip():
                         candidate.verification_output = "Darwinian Rejection: the reproduction run changed the workspace"
+                        record("reproduction_clean", False, "reproduction run changed the workspace")
                         return False
+                    record("reproduction_clean", True, "base tree unchanged by reproduction")
 
                 # Write bytes verbatim: write_text() translates LF to CRLF on Windows, turning
                 # every line of an LF file into a spurious change in the verified diff.
@@ -449,14 +549,18 @@ class MorphogeneticEngine:
                 for token in forbidden_tokens:
                     if token in candidate.mutated_code.lower():
                         candidate.verification_output = f"Darwinian Rejection: Mutation violated architectural invariant (found forbidden token '{token}')"
+                        record("forbidden_tokens", False, f"found '{token}'")
                         return False
+                record("forbidden_tokens", True, f"{len(forbidden_tokens)} tokens checked")
 
                 # 2.5 Static and security scan gate: ruff and bandit on changed Python files
                 if self.enable_scan_gate:
                     passed, scan_err = self._run_scan_gate(sandbox, [target_file_path])
                     if not passed:
                         candidate.verification_output = scan_err
+                        record("scan", False, scan_err.splitlines()[0][:200] if scan_err else "scan failed")
                         return False
+                    record("scan", True, "ruff + bandit clean" if target_file_path.suffix.lower() == ".py" else "no Python files")
 
                 # 3. Darwinian Survival Gate: run the trusted profile through the isolated runner
                 rel = target_file_path.relative_to(sandbox).as_posix()
@@ -464,19 +568,25 @@ class MorphogeneticEngine:
                     res = self.verification_runner.run(workspace=sandbox, profile=verification_profile, timeout=120)
                 except subprocess.TimeoutExpired:
                     candidate.verification_output = "Darwinian Rejection: verification timed out"
+                    record("verification", False, f"{verification_profile} timed out")
                     return False
                 except OutputLimitExceeded:
                     candidate.verification_output = "Darwinian Rejection: verification output exceeded the host limit"
+                    record("verification", False, f"{verification_profile} output exceeded host limit")
                     return False
 
                 candidate.verification_output = (res.stdout + "\n" + res.stderr).strip()
                 if res.returncode != 0:
+                    record("verification", False, f"{verification_profile} exit {res.returncode} (apoptosis)")
                     return False  # Apoptosis
+                record("verification", True, f"{verification_profile} exit 0")
 
                 pointer_after = git_pointer.read_bytes() if git_pointer.is_file() else None
                 if pointer_before is None or pointer_after != pointer_before:
                     candidate.verification_output = "Darwinian Rejection: verified code modified the worktree git pointer"
+                    record("git_pointer", False, "worktree git pointer moved")
                     return False
+                record("git_pointer", True, "pointer unchanged")
 
                 # The accepted diff must come from the bytes that were scanned and tested. A runner that can
                 # write the workspace could leave different content (or a different mode) in the target.
@@ -487,7 +597,9 @@ class MorphogeneticEngine:
                     current_bytes, current_mode = None, None
                 if current_bytes != pinned_bytes or current_mode != pinned_mode:
                     candidate.verification_output = "Darwinian Rejection: target changed during verification"
+                    record("target_stable", False, "target bytes or mode moved during verification")
                     return False
+                record("target_stable", True, "scanned bytes are the diffed bytes")
 
                 # A zero exit is not enough: only the declared target may differ, and it must be an
                 # unstaged modification (no extra, staged, deleted or untracked files).
@@ -503,7 +615,9 @@ class MorphogeneticEngine:
                     candidate.verification_output = (
                         "Darwinian Rejection: unexpected changes after verification: " + "; ".join(unexpected)[:300]
                     )
+                    record("tree_clean", False, "; ".join(unexpected)[:200] or "git status failed")
                     return False
+                record("tree_clean", True, "only the declared target differs")
 
                 diff_res = subprocess.run(
                     ["git", "diff", "--", f":(literal){rel}"],
@@ -511,14 +625,20 @@ class MorphogeneticEngine:
                 )
                 if diff_res.returncode != 0 or not diff_res.stdout:
                     candidate.verification_output = "Darwinian Rejection: could not produce a verified diff"
+                    record("diff", False, "git diff empty or failed")
                     return False
                 candidate.unified_diff = diff_res.stdout
+                record("diff", True, f"{len(diff_res.stdout.splitlines())} diff lines")
                 candidate.survival_passed = True
                 return True
 
         except Exception as e:
             candidate.verification_output = f"Sandbox Darwinian execution error: {str(e)}"
             candidate.survival_passed = False
+            try:
+                candidate.gates.append({"gate": "sandbox", "passed": False, "detail": str(e)[:300]})
+            except Exception:
+                pass
             return False
 
     def synthesize_repair_candidate(
@@ -582,6 +702,7 @@ class MorphogeneticEngine:
                 "apoptosis": not passed,
                 "verification_output": candidate.verification_output,
                 "unified_diff": candidate.unified_diff if passed else "",
+                "gates": [dict(g) for g in candidate.gates],
             })
             if passed and survivor is None:
                 survivor = candidate

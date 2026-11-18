@@ -1,6 +1,6 @@
 # Tag: `test-fixture`
 
-[← index](../REPO_TAGS.md) · 23 files
+[← index](../REPO_TAGS.md) · 24 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -16,6 +16,7 @@
 | `triad/tests/test_hook.py` | `triad/cli/hook.py`<br>`triad/worktree.py` | `how is the pre-commit hook tested`<br>`does the self-healing applicator close the loop` |
 | `triad/tests/test_intent_engine.py` | `triad/intent_engine.py` | `which classifications are covered`<br>`how are high-stakes prompts detected` |
 | `triad/tests/test_local_llm_backend.py` | `triad/advisor_manager.py`<br>`triad/nous_bridge.py` | `which endpoint is the local backend`<br>`is the local tier last in the cascade` |
+| `triad/tests/test_morpho_sh0.py` | `triad/morpho.py`<br>`triad/morphogenetic.py`<br>`triad/ts_verify/__init__.py` | `how are SH-0 gates and TypeScript verification tested` |
 | `triad/tests/test_morphogenetic_gates.py` | `triad/morphogenetic.py`<br>`triad/docker_runner.py` | `is the engine flag default off`<br>`what is the diff-size cap`<br>`is a reproduction test required` |
 | `triad/tests/test_morphogenetic.py` | `triad/morphogenetic.py` | `what does the engine rewrite`<br>`which gates are exercised` |
 | `triad/tests/test_notifier.py` | `triad/notifier.py` | `what payload is sent to the phone`<br>`how is a failed delivery handled` |

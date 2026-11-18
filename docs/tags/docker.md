@@ -1,6 +1,6 @@
 # Tag: `docker`
 
-[← index](../REPO_TAGS.md) · 7 files
+[← index](../REPO_TAGS.md) · 10 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -11,3 +11,6 @@
 | `triad/tests/test_docker_harness.py` | `triad/bench/docker_harness.py` | `how is the harness cache key built`<br>`does this test start docker` |
 | `triad/tests/test_docker_runner.py` | `triad/docker_runner.py` | `how is the container-backed runner tested`<br>`what mounts are asserted` |
 | `triad/tests/test_morphogenetic_gates.py` | `triad/morphogenetic.py`<br>`triad/docker_runner.py` | `is the engine flag default off`<br>`what is the diff-size cap`<br>`is a reproduction test required` |
+| `triad/ts_verify/__init__.py` | `triad/docker_runner.py`<br>`triad/ts_verify/Dockerfile`<br>`triad/ts_verify/verify-ts` | `how is TypeScript verified in a container`<br>`how is the exocortex-verify image tagged` |
+| `triad/ts_verify/Dockerfile` | `triad/ts_verify/__init__.py`<br>`triad/ts_verify/verify-ts` | `what is inside the exocortex-verify image` |
+| `triad/ts_verify/verify-ts` | `triad/ts_verify/__init__.py`<br>`triad/ts_verify/Dockerfile` | `how does verify-ts stage /work into tmpfs` |

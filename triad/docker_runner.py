@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Tags: docker, verification
+# Links: triad/morphogenetic.py, triad/bench/docker_harness.py
+# Queries: "how is a test run inside a container", "what limits does the container get"
 """
 docker_runner.py
 Container-backed VerificationRunner for the Morphogenetic engine.
@@ -17,10 +20,6 @@ Profiles are argv lists from trusted configuration, never taken from a candidate
 the image, so use image-relative commands (``python``, not ``sys.executable``).
 """
 
-# Tags: docker, verification
-# Links: triad/morphogenetic.py, triad/bench/docker_harness.py
-# Queries: "how is a test run inside a container", "what limits does the container get"
-
 import os
 import shutil
 import subprocess
@@ -31,6 +30,15 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 DEFAULT_IMAGE = "python:3.12-slim"
+
+try:
+    from triad.ts_verify import TS_VERIFY_TMPFS_SIZE, is_ts_verify_image
+except ImportError:  # pragma: no cover - installs predating the SH-0 verify image
+    TS_VERIFY_TMPFS_SIZE = "2g"
+
+    def is_ts_verify_image(image: str) -> bool:
+        return image.startswith("exocortex-verify:")
+
 _SAFE_ENV = {
     "PYTHONDONTWRITEBYTECODE": "1",
     "PYTHONIOENCODING": "utf-8",
@@ -182,13 +190,22 @@ class DockerRunner:
         return self._checked
 
     def ensure_image(self, timeout: int = 600) -> None:
-        """Explicit, host-side step: make sure the image exists locally (pulls if missing)."""
+        """Explicit, host-side step: make sure the image exists locally (pulls if missing).
+
+        The SH-0 TypeScript verify image is never pulled: no image for the current
+        lockfile hash means refuse to run (build it with triad.ts_verify first).
+        """
         ok, reason = self.available()
         if not ok:
             raise IsolationUnavailable(reason)
         have = self._run([self._docker, "image", "inspect", self.image], capture_output=True, text=True, timeout=30)
         if have.returncode == 0:
             return
+        if is_ts_verify_image(self.image):
+            raise IsolationUnavailable(
+                f"verify image {self.image} not present locally; build it with "
+                "triad.ts_verify.build_ts_verify_image (verify images are never pulled)"
+            )
         pulled = self._run([self._docker, "pull", self.image], capture_output=True, text=True, timeout=timeout)
         if pulled.returncode != 0:
             raise IsolationUnavailable(f"could not pull {self.image}: {pulled.stderr.strip()[-200:]}")
@@ -201,6 +218,9 @@ class DockerRunner:
         if "," in ws or '"' in ws or "\n" in ws:
             # --mount options are comma separated; refuse paths that could smuggle extra options.
             raise ValueError(f"workspace path not allowed for container mount: {ws!r}")
+        # SH-0: the TypeScript verify step stages /work into /tmp, which needs 2g.
+        # One --tmpfs flag only; never a second "--tmpfs /tmp".
+        tmpfs_size = TS_VERIFY_TMPFS_SIZE if is_ts_verify_image(self.image) else self.tmpfs_size
         cmd = [
             self._docker, "run", "--rm", "--init",
             "--name", name,
@@ -212,7 +232,7 @@ class DockerRunner:
             "--security-opt", "no-new-privileges",
             "--user", _container_user(),
             "--read-only",
-            "--tmpfs", f"/tmp:rw,nosuid,size={self.tmpfs_size}",  # nosec B108 - tmpfs inside the sandbox, not the host
+            "--tmpfs", f"/tmp:rw,nosuid,size={tmpfs_size}",  # nosec B108 - tmpfs inside the sandbox, not the host
             "--memory", self.memory, "--memory-swap", self.memory,
             "--cpus", self.cpus,
             "--pids-limit", str(self.pids_limit),

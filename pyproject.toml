@@ -42,17 +42,6 @@ line-length = 200
 [tool.ruff.lint]
 select = ["E9", "F"]
 
-[tool.ruff.lint.per-file-ignores]
-# triad_engine.py is the dispatcher hub, and every submodule import in it is written
-# twice: `try: from triad.X import (...)` then `except ImportError: from X import (...)`.
-# Ruff reads the second copy as unused because the first already bound the names, and it
-# cannot see that the second copy is what makes a flat/installed layout work. Deleting
-# either half breaks one of the two supported layouts, and the names are also re-exported
-# to callers (`triad.server`'s /doctor route and several test modules import helpers from
-# `triad.triad_engine`, not from their defining module). Genuinely dead imports were
-# removed from this file by hand; this ignore covers only the intentional surface.
-"triad/triad_engine.py" = ["F401"]
-
 [tool.bandit]
 exclude_dirs = ["triad/tests", "triad/bench/.cache"]
 
@@ -71,5 +60,5 @@ packages = ["triad", "triad.bench", "triad.agent"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-triad = ["advisors.json", "empty-mcp.json"]
+triad = ["advisors.json", "empty-mcp.json", "protected_paths.txt", "ts_verify/*"]
 "triad.bench" = ["swebench_instances.json", "cases/*", "cases_v1/*"]

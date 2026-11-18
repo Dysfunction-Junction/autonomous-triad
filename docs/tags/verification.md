@@ -1,6 +1,6 @@
 # Tag: `verification`
 
-[← index](../REPO_TAGS.md) · 22 files
+[← index](../REPO_TAGS.md) · 27 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -17,12 +17,17 @@
 | `triad/cli/gate.py` | `triad/notifier.py`<br>`triad/competition.py` | `what does the ground-truth gate verify`<br>`when is a phone notified`<br>`what blocks a commit` |
 | `triad/cli/hook.py` | `triad/worktree.py`<br>`triad/cli/mesh.py` | `how do I install the pre-commit hook`<br>`what does the hook run`<br>`how does self-healing apply a fix` |
 | `triad/docker_runner.py` | `triad/morphogenetic.py`<br>`triad/bench/docker_harness.py` | `how is a test run inside a container`<br>`what limits does the container get` |
+| `triad/morpho.py` | `triad/morphogenetic.py`<br>`triad/docker_runner.py` | `how does SH-0 intake a failing check`<br>`how is a morpho branch created` |
 | `triad/morphogenetic.py` | `triad/docker_runner.py`<br>`triad/worktree.py` | `what does the morphogenetic engine rewrite`<br>`what gates guard a self-edit`<br>`how is a reproduction test required` |
 | `triad/patching.py` | `triad/worktree.py`<br>`triad/triad_engine.py` | `how is a patch applied and rolled back`<br>`what is a tree snapshot`<br>`how is the working tree fingerprinted` |
 | `triad/tests/__init__.py` | `pyproject.toml` | `how is the test suite run` |
 | `triad/tests/test_docker_harness.py` | `triad/bench/docker_harness.py` | `how is the harness cache key built`<br>`does this test start docker` |
 | `triad/tests/test_docker_runner.py` | `triad/docker_runner.py` | `how is the container-backed runner tested`<br>`what mounts are asserted` |
 | `triad/tests/test_hook.py` | `triad/cli/hook.py`<br>`triad/worktree.py` | `how is the pre-commit hook tested`<br>`does the self-healing applicator close the loop` |
+| `triad/tests/test_morpho_sh0.py` | `triad/morpho.py`<br>`triad/morphogenetic.py`<br>`triad/ts_verify/__init__.py` | `how are SH-0 gates and TypeScript verification tested` |
 | `triad/tests/test_morphogenetic_gates.py` | `triad/morphogenetic.py`<br>`triad/docker_runner.py` | `is the engine flag default off`<br>`what is the diff-size cap`<br>`is a reproduction test required` |
 | `triad/triad_engine.py` | `triad/advisor_manager.py`<br>`triad/intent_engine.py`<br>`bin/triad` | `where is the command surface defined`<br>`how does review dispatch to advisors`<br>`what does the engine do with a gate result` |
+| `triad/ts_verify/__init__.py` | `triad/docker_runner.py`<br>`triad/ts_verify/Dockerfile`<br>`triad/ts_verify/verify-ts` | `how is TypeScript verified in a container`<br>`how is the exocortex-verify image tagged` |
+| `triad/ts_verify/Dockerfile` | `triad/ts_verify/__init__.py`<br>`triad/ts_verify/verify-ts` | `what is inside the exocortex-verify image` |
+| `triad/ts_verify/verify-ts` | `triad/ts_verify/__init__.py`<br>`triad/ts_verify/Dockerfile` | `how does verify-ts stage /work into tmpfs` |
 | `triad/worktree.py` | `triad/patching.py`<br>`triad/cli/hook.py` | `how is an ephemeral worktree created`<br>`who cleans it up`<br>`why isolate rather than edit in place` |

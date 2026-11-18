@@ -1,0 +1,155 @@
+#!/bin/sh
+# Tags: docker, verification
+# Links: triad/ts_verify/__init__.py, triad/ts_verify/Dockerfile
+# Queries: "how does verify-ts stage /work into tmpfs"
+# verify-ts: SH-0 TypeScript verification entrypoint (owner decision D12).
+# Baked into the exocortex-verify image at /usr/local/bin/verify-ts, so a patch
+# can never change what "verify" means. Runs with --network none and --read-only;
+# /tmp is the only writable filesystem (2g tmpfs).
+#
+# Usage: verify-ts <package> [--tsc] [test-file ...]
+#   <package>   workspace dir, e.g. apps/daemon or packages/core
+#   --tsc       run "tsc --noEmit -p ." for the package
+#   test-file   repo-relative test path under <package>, e.g. apps/daemon/src/foo.test.ts
+#
+# The script copies /work (the read-only worktree bind mount) into a fresh /tmp
+# staging dir, symlinks each /deps/<pkg>/node_modules into place, then runs the
+# checks inside the staging dir. /work is never written.
+set -eu
+
+fail() { echo "verify-ts: ERROR: $*" >&2; exit 2; }
+step() { echo "verify-ts: --- $* ---"; }
+
+[ $# -ge 1 ] || fail "usage: verify-ts <package> [--tsc] [test-file ...]"
+PKG="$1"; shift
+
+# Validate the package: exactly one level under apps/ or packages/, safe chars only.
+case "$PKG" in
+  apps/*|packages/*) : ;;
+  *) fail "package must be under apps/ or packages/: $PKG" ;;
+esac
+case "$PKG" in
+  *..*|*//*|*/*/*) fail "package must be exactly one level deep: $PKG" ;;
+esac
+case "$PKG" in
+  *[!A-Za-z0-9_./-]*) fail "package has unsafe characters: $PKG" ;;
+esac
+[ -d "/work/$PKG" ] || fail "package not in worktree: $PKG"
+[ -f "/work/$PKG/package.json" ] || fail "package has no package.json: $PKG"
+
+RUN_TSC=0
+TESTS=""
+NTESTS=0
+for arg in "$@"; do
+  if [ "$arg" = "--tsc" ]; then
+    RUN_TSC=1
+    continue
+  fi
+  case "$arg" in
+    -*) fail "unknown flag: $arg" ;;
+    /*) fail "test file must be repo-relative: $arg" ;;
+    *..*) fail "test file must not contain ..: $arg" ;;
+  esac
+  case "$arg" in
+    "$PKG"/*) : ;;
+    *) fail "test file is outside $PKG: $arg" ;;
+  esac
+  case "$arg" in
+    *.test.*|*.spec.*|*/test/*|*/tests/*|*/__tests__/*) : ;;
+    *) fail "not recognisably a test file: $arg" ;;
+  esac
+  [ -f "/work/$arg" ] || fail "test file missing from worktree: $arg"
+  TESTS="$TESTS $arg"
+  NTESTS=$((NTESTS + 1))
+  [ "$NTESTS" -le 20 ] || fail "too many test files (max 20)"
+done
+
+[ "$RUN_TSC" -eq 1 ] || [ "$NTESTS" -ge 1 ] || fail "nothing to do: pass --tsc and/or test files"
+
+# Refuse to start if the worktree cannot fit in the tmpfs with headroom.
+# /work has no node_modules (worktrees never do); allow up to 1500 MB of source.
+WORK_KB=$(du -sk /work 2>/dev/null | cut -f1)
+case "$WORK_KB" in
+  ''|*[!0-9]*) fail "cannot size /work" ;;
+esac
+[ "$WORK_KB" -le 1536000 ] || fail "/work is ${WORK_KB}KB, over the 1500MB staging cap"
+
+STAGE=$(mktemp -d /tmp/verify-XXXXXX)
+trap 'rm -rf "$STAGE"' EXIT INT TERM
+step "staging /work to $STAGE/work"
+mkdir -p "$STAGE/work"
+cp -a /work/. "$STAGE/work/"
+
+step "linking /deps node_modules into the staging dir"
+if [ -d /deps/node_modules ]; then
+  ln -s /deps/node_modules "$STAGE/work/node_modules"
+fi
+for manifest in /deps/apps/*/package.json /deps/packages/*/package.json; do
+  [ -f "$manifest" ] || continue
+  rel=${manifest#/deps/}
+  pkgdir=${rel%/package.json}
+  if [ -d "/deps/$pkgdir/node_modules" ] && [ ! -e "$STAGE/work/$pkgdir/node_modules" ]; then
+    mkdir -p "$STAGE/work/$pkgdir"
+    ln -s "/deps/$pkgdir/node_modules" "$STAGE/work/$pkgdir/node_modules"
+  fi
+done
+
+cd "$STAGE/work/$PKG"
+FAIL=0
+
+if [ "$RUN_TSC" -eq 1 ]; then
+  step "tsc --noEmit -p . in $PKG"
+  if [ -x ./node_modules/.bin/tsc ]; then
+    TSC=./node_modules/.bin/tsc
+  elif [ -x /deps/node_modules/.bin/tsc ]; then
+    TSC=/deps/node_modules/.bin/tsc
+  else
+    echo "verify-ts: ERROR: no tsc for $PKG" >&2
+    exit 2
+  fi
+  if "$TSC" --noEmit -p .; then
+    echo "verify-ts: tsc PASS"
+  else
+    echo "verify-ts: tsc FAIL"
+    FAIL=1
+  fi
+fi
+
+if [ "$NTESTS" -ge 1 ]; then
+  RELS=""
+  for t in $TESTS; do
+    RELS="$RELS ${t#$PKG/}"
+  done
+  # shellcheck disable=SC2086
+  set -- $RELS
+  if grep -q '"vitest"' package.json 2>/dev/null || grep -q 'vitest run' package.json 2>/dev/null; then
+    step "vitest run $* in $PKG"
+    if [ -x ./node_modules/.bin/vitest ]; then
+      VITEST=./node_modules/.bin/vitest
+    else
+      echo "verify-ts: ERROR: vitest runner missing for $PKG" >&2
+      exit 2
+    fi
+    if "$VITEST" run "$@"; then
+      echo "verify-ts: tests PASS"
+    else
+      echo "verify-ts: tests FAIL"
+      FAIL=1
+    fi
+  else
+    step "node --test $* in $PKG"
+    if node --import tsx --test "$@"; then
+      echo "verify-ts: tests PASS"
+    else
+      echo "verify-ts: tests FAIL"
+      FAIL=1
+    fi
+  fi
+fi
+
+if [ "$FAIL" -eq 0 ]; then
+  echo "verify-ts: RESULT PASS"
+else
+  echo "verify-ts: RESULT FAIL"
+fi
+exit "$FAIL"

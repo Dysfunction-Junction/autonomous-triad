@@ -1,0 +1,37 @@
+# SH-0 protected safety paths (owner decision D12, 2026-11-12).
+# Read by MorphogeneticEngine._is_protected_target in morphogenetic.py.
+# One repo-relative POSIX path per line. Blank lines and "#" comments are ignored.
+# A trailing "/" marks a directory prefix: the directory itself and everything under it.
+# A bare single-component directory (no "/" except the trailing one, e.g. "migrations/")
+# matches ANY path component with that name, present or future.
+# Matching is case-insensitive (fail closed on Windows case variants).
+# This file lives under packages/triad/triad/, so it protects itself.
+
+# The engine itself and its guardrails.
+packages/triad/triad/
+packages/allowlist/
+
+# Safety code: approval, attestation, capabilities, shadow, executors, proposals.
+apps/daemon/src/approval-attestation.ts
+apps/daemon/src/key-attestation.ts
+apps/daemon/src/delegate-capabilities.ts
+apps/daemon/src/shadow-recorder.ts
+apps/daemon/src/scripted-executors.ts
+apps/daemon/src/pending-proposals.ts
+apps/daemon/src/attestation-roots/
+apps/daemon/ops/
+
+# Tag gate: decides what "covered" means.
+scripts/repo-tags.mjs
+
+# Event log and hash chain in packages/core (paths confirmed 2026-11-17):
+# db.ts computes and verifies the chain, canonical.ts is the hash input,
+# schema.sql is the chain DDL, schema-types.ts is the row contract.
+packages/core/db.ts
+packages/core/canonical.ts
+packages/core/schema.sql
+packages/core/schema-types.ts
+
+# Any migrations directory, present or future. No such directory exists in the
+# repo today; this entry matches any path component named "migrations".
+migrations/

@@ -230,6 +230,7 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "host-uid containers are Linux only")
     def test_private_workspace_is_readable_and_writable(self):
+        os.chmod(self.ws, 0o700)
         (self.ws / "seed.txt").write_text("hello", encoding="utf-8")
         os.chmod(self.ws / "seed.txt", 0o600)
         res = self._run(

@@ -1,12 +1,12 @@
 # Repository tag index
 
 > Generated view — do not edit. Regenerate with `node scripts/repo-tags.mjs`.
-> Source: `git ls-files` · branch `chore/tag-headers` · commit `bae6ec4` · 91 tracked files.
+> Source: `git ls-files` · branch `master` · commit `7ebf4f5` · 97 tracked files.
 >
 > `Tags/Links/Queries` is the header written at the top of each file. This file is the map;
 > the headers are the body. Both move together in the same commit.
 
-**Coverage:** 91 / 91 files carry a tag header (100.0%). 0 untagged.
+**Coverage:** 96 / 97 files carry a tag header (99.0%). 1 untagged.
 
 ## How to read this
 
@@ -81,6 +81,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/docker_runner.py` | `docker`<br>`verification` | `triad/morphogenetic.py`<br>`triad/bench/docker_harness.py` |
 | `triad/egress.py` | `egress`<br>`protocol-contract` | `triad/advisor_manager.py`<br>`triad/nous_bridge.py` |
 | `triad/intent_engine.py` | `intent`<br>`routing`<br>`review` | `triad/cli/review.py`<br>`triad/triad_engine.py`<br>`docs/ARCHITECTURE.md` |
+| `triad/morpho.py` | `morphogenetic`<br>`patching`<br>`verification` | `triad/morphogenetic.py`<br>`triad/docker_runner.py` |
 | `triad/morphogenetic.py` | `morphogenetic`<br>`patching`<br>`verification` | `triad/docker_runner.py`<br>`triad/worktree.py` |
 | `triad/notifier.py` | `notify`<br>`protocol-contract` | `triad/cli/gate.py`<br>`triad/triad_engine.py` |
 | `triad/nous_bridge.py` | `nous`<br>`routing`<br>`cost` | `triad/advisor_manager.py`<br>`triad/cli/doctor.py` |
@@ -104,6 +105,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/tests/test_hook.py` | `cli`<br>`worktree`<br>`verification`<br>`test-fixture` | `triad/cli/hook.py`<br>`triad/worktree.py` |
 | `triad/tests/test_intent_engine.py` | `intent`<br>`routing`<br>`test-fixture` | `triad/intent_engine.py` |
 | `triad/tests/test_local_llm_backend.py` | `local-llm`<br>`advisor`<br>`test-fixture` | `triad/advisor_manager.py`<br>`triad/nous_bridge.py` |
+| `triad/tests/test_morpho_sh0.py` | `morphogenetic`<br>`verification`<br>`test-fixture` | `triad/morpho.py`<br>`triad/morphogenetic.py`<br>`triad/ts_verify/__init__.py` |
 | `triad/tests/test_morphogenetic_gates.py` | `morphogenetic`<br>`docker`<br>`verification`<br>`test-fixture` | `triad/morphogenetic.py`<br>`triad/docker_runner.py` |
 | `triad/tests/test_morphogenetic.py` | `morphogenetic`<br>`test-fixture` | `triad/morphogenetic.py` |
 | `triad/tests/test_notifier.py` | `notify`<br>`test-fixture` | `triad/notifier.py` |
@@ -116,6 +118,9 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/tests/test_triage.py` | `triage`<br>`local-llm`<br>`test-fixture` | `triad/cli/review.py` |
 | `triad/tests/test_worktree.py` | `worktree`<br>`test-fixture` | `triad/worktree.py` |
 | `triad/triad_engine.py` | `engine`<br>`cli`<br>`review`<br>`verification` | `triad/advisor_manager.py`<br>`triad/intent_engine.py`<br>`bin/triad` |
+| `triad/ts_verify/__init__.py` | `docker`<br>`morphogenetic`<br>`verification` | `triad/docker_runner.py`<br>`triad/ts_verify/Dockerfile`<br>`triad/ts_verify/verify-ts` |
+| `triad/ts_verify/Dockerfile` | `docker`<br>`verification` | `triad/ts_verify/__init__.py`<br>`triad/ts_verify/verify-ts` |
+| `triad/ts_verify/verify-ts` | `docker`<br>`verification` | `triad/ts_verify/__init__.py`<br>`triad/ts_verify/Dockerfile` |
 | `triad/worktree.py` | `worktree`<br>`patching`<br>`verification` | `triad/patching.py`<br>`triad/cli/hook.py` |
 
 ## Tags
@@ -129,7 +134,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `claims` | 1 | [tags/claims.md](tags/claims.md) |
 | `cli` | 21 | [tags/cli.md](tags/cli.md) |
 | `cost` | 13 | [tags/cost.md](tags/cost.md) |
-| `docker` | 7 | [tags/docker.md](tags/docker.md) |
+| `docker` | 10 | [tags/docker.md](tags/docker.md) |
 | `egress` | 2 | [tags/egress.md](tags/egress.md) |
 | `engine` | 11 | [tags/engine.md](tags/engine.md) |
 | `failover` | 9 | [tags/failover.md](tags/failover.md) |
@@ -137,19 +142,27 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `ledger` | 1 | [tags/ledger.md](tags/ledger.md) |
 | `local-llm` | 3 | [tags/local-llm.md](tags/local-llm.md) |
 | `mcp` | 1 | [tags/mcp.md](tags/mcp.md) |
-| `morphogenetic` | 3 | [tags/morphogenetic.md](tags/morphogenetic.md) |
+| `morphogenetic` | 6 | [tags/morphogenetic.md](tags/morphogenetic.md) |
 | `notify` | 3 | [tags/notify.md](tags/notify.md) |
 | `nous` | 2 | [tags/nous.md](tags/nous.md) |
 | `ops-runbook` | 23 | [tags/ops-runbook.md](tags/ops-runbook.md) |
-| `patching` | 5 | [tags/patching.md](tags/patching.md) |
+| `patching` | 6 | [tags/patching.md](tags/patching.md) |
 | `protocol-contract` | 11 | [tags/protocol-contract.md](tags/protocol-contract.md) |
 | `review` | 14 | [tags/review.md](tags/review.md) |
 | `routing` | 10 | [tags/routing.md](tags/routing.md) |
 | `server` | 2 | [tags/server.md](tags/server.md) |
 | `skills` | 2 | [tags/skills.md](tags/skills.md) |
 | `sync` | 9 | [tags/sync.md](tags/sync.md) |
-| `test-fixture` | 23 | [tags/test-fixture.md](tags/test-fixture.md) |
+| `test-fixture` | 24 | [tags/test-fixture.md](tags/test-fixture.md) |
 | `tooling` | 9 | [tags/tooling.md](tags/tooling.md) |
 | `triage` | 3 | [tags/triage.md](tags/triage.md) |
-| `verification` | 22 | [tags/verification.md](tags/verification.md) |
+| `verification` | 27 | [tags/verification.md](tags/verification.md) |
 | `worktree` | 6 | [tags/worktree.md](tags/worktree.md) |
+
+## Backfill backlog
+
+Untagged files per area, largest first. Tag the areas you actually query.
+
+| Area | Untagged files |
+| --- | --- |
+| `triad/protected_paths.txt` | 1 |
