@@ -9,10 +9,6 @@ Verifies:
 - `--apply-verified` applies self-healing patches cleanly
 """
 
-# Tags: cli, worktree, verification, test-fixture
-# Links: triad/cli/hook.py, triad/worktree.py
-# Queries: "how is the pre-commit hook tested", "does the self-healing applicator close the loop"
-
 import argparse
 import pytest
 import io
@@ -47,13 +43,6 @@ def _has_runnable_python3() -> bool:
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
-
-
-def _expected_failure_posix_only(fn):
-    """Mark as expectedFailure on POSIX/Linux where /bin/sh is dash and chmod bits differ from Windows Git Bash."""
-    if sys.platform != "win32":
-        return unittest.expectedFailure(fn)
-    return fn
 
 
 class TestTriadHook(unittest.TestCase):
@@ -1051,12 +1040,6 @@ class TestRealRepoInvariants(unittest.TestCase):
                     mismatches_sym = _verify_checkout_representation(repo, candidate_tree)
                     self.assertTrue(any("link_target.py" in m for m in mismatches_sym), "Mutated symlink target must be detected")
 
-    # Known bug (see PR #1 audit): the "integrate in-place" merge path inlines
-    # a bash-specific legacy hook body under one shebang, which breaks when
-    # the combined script is invoked via a literal `sh` rather than its own
-    # shebang (e.g. Git for Windows' hook runner). Needs a dedicated fix to
-    # the hook-template dispatch logic in triad_engine.py, not a test change.
-    @_expected_failure_posix_only
     def test_legacy_hook_chaining_preserves_interpreter_and_bash_arrays(self):
         """Verify Triad hook template executes legacy hooks directly, preserving Bash arrays and declared interpreters."""
         import subprocess, shutil
@@ -1097,12 +1080,6 @@ fi
         self.assertEqual(res.returncode, 0, f"Hook execution failed: {res.stderr}\n{res.stdout}")
         self.assertIn("LEGACY_BASH_ARRAY_OK: beta", res.stdout)
 
-    # Known bug (see PR #1 audit): chaining to the existing hook is gated on
-    # that hook's executable bit at install time, which the test doesn't set
-    # before installing; the CLI-discoverability fix in this PR also changed
-    # how far this path gets before failing. Needs the hook-installer fix
-    # tracked in the audit, not a test change.
-    @_expected_failure_posix_only
     def test_legacy_hook_chaining_propagates_failure_exit(self):
         """Verify failing legacy hook halts Triad pre-commit execution and aborts commit."""
         import subprocess, shutil
@@ -1600,9 +1577,6 @@ class TestTriadHookAdvisoryFixes(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
-    # Known bug (see PR #1 audit): same bash-under-plain-sh issue as
-    # test_legacy_hook_chaining_preserves_interpreter_and_bash_arrays above.
-    @_expected_failure_posix_only
     def test_pre_commit_framework_exec_runs_as_child_and_fails_closed(self):
         """[Finding 1] Verify pre-commit.com hooks dispatching via exec run as child process and fail-closed."""
         import subprocess, shutil
@@ -3363,7 +3337,9 @@ class TestPhase3AdvisoryCouncilRefinements(unittest.TestCase):
         from triad.triad_engine import TRIAD_HOOK_TEMPLATE
         self.assertIn('export TARGET_HOOK', TRIAD_HOOK_TEMPLATE)
         self.assertIn('export TRIAD_ORIGINAL_HOOK', TRIAD_HOOK_TEMPLATE)
-        self.assertIn('sh|bash|zsh|dash|ash|ksh)', TRIAD_HOOK_TEMPLATE)
+        # bash/zsh/ksh are executed as their own child; POSIX sh is sourced with $0 preserved.
+        self.assertIn('bash|zsh|ksh)', TRIAD_HOOK_TEMPLATE)
+        self.assertIn('sh|dash|ash)', TRIAD_HOOK_TEMPLATE)
         self.assertNotIn('ksh|"")', TRIAD_HOOK_TEMPLATE)
 
     def test_rollback_refuses_directory_removal(self):
@@ -4977,8 +4953,8 @@ sys.meta_path.insert(0, MockParentEditableFinder)
                 self.assertEqual(cm.exception.code, 1)
                 self.assertIn("café.py", mock_err.getvalue(), "Non-ASCII ignored source dependency must be detected despite Git quoting")
 
-    def test_hook_install_over_disabled_hook_does_not_block_commits(self):
-        """[Round 5 Finding 1] Verify installing over a non-executable (disabled) hook marks backup inactive and does not block commits."""
+    def test_hook_install_over_nonexecutable_hook_still_chains_and_fails_closed(self):
+        """A non-executable existing hook is still chained, and its failure exit fails closed."""
         import shutil
         from triad.triad_engine import cmd_hook
         sh_bin = shutil.which("sh") or (r"C:\Program Files\Git\bin\sh.exe" if os.path.exists(r"C:\Program Files\Git\bin\sh.exe") else None)
@@ -4992,7 +4968,7 @@ sys.meta_path.insert(0, MockParentEditableFinder)
             disabled_hook = hooks_dir / "pre-commit"
             disabled_hook.write_text("#!/bin/sh\necho 'disabled hook'\nexit 1\n", encoding="utf-8")
 
-            # Install triad hook over disabled hook (with _is_hook_executable returning False)
+            # Install triad hook over a hook the executable-bit check calls disabled.
             args = argparse.Namespace(hook_action="install", force=False)
             with patch("triad.triad_engine.get_repo_root", return_value=repo_dir):
                 with patch("triad.triad_engine._is_hook_executable", return_value=False):
@@ -5001,13 +4977,13 @@ sys.meta_path.insert(0, MockParentEditableFinder)
 
             installed_content = disabled_hook.read_text(encoding="utf-8")
             self.assertIn("# TRIAD_BACKUP_OWNED: pre-commit.legacy", installed_content)
-            self.assertIn("# TRIAD_BACKUP_ACTIVE: 0", installed_content)
+            self.assertIn("# TRIAD_BACKUP_ACTIVE: 1", installed_content)
 
-            # Test execution: ensure it bypasses disabled legacy execution and doesn't fail closed with 'not executable'
             env = os.environ.copy()
             env["TRIAD_GATE_ACTIVE"] = "1"  # bypass gate body for hook isolation check
             res = subprocess.run([sh_bin, str(disabled_hook)], cwd=str(repo_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
-            self.assertEqual(res.returncode, 0, f"Hook execution over disabled backup must not fail. Stderr: {res.stderr}")
+            self.assertEqual(res.returncode, 1, f"Non-executable legacy hook must still run and fail closed. Stdout: {res.stdout}\nStderr: {res.stderr}")
+            self.assertIn("disabled hook", res.stdout)
 
     def test_hook_template_dispatches_interpreter_with_spaces_and_env_split(self):
         """[Round 5 Finding 3] Verify hook template dispatches interpreters with spaces and env -S without word splitting errors."""

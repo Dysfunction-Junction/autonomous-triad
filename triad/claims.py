@@ -6,10 +6,10 @@ so agents can check before starting work and avoid colliding, or find
 each other and redirect ("they're already on this, I'll help elsewhere
 or pick up what they need next").
 
-Basic first pass: a flat JSON dict keyed by claim id. No file locking
-(Windows + multiple agents means a lost write is possible but rare and
-self-healing via staleness TTL) — pivot later if collisions on the
-claims file itself become a real problem.
+A flat JSON dict keyed by claim id. Updates take an exclusive
+inter-process lock (fcntl on POSIX, msvcrt on Windows) across the whole
+read-modify-write so concurrent agents cannot drop each other's claims.
+A lock timeout is logged and raised; it is never treated as success.
 
 `contest` logs the Advisory Council's actual verdict text into the
 decision ledger (plaintext JSONL) — the secrets warning in
@@ -23,17 +23,108 @@ decision_log.py applies to council output here too.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import logging
+import math
 import os
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 CLAIMS_FILENAME = "CLAIMS.json"
 DEFAULT_TTL_MINUTES = 60
+DEFAULT_LOCK_TIMEOUT = 5.0
+
+
+class ClaimsLockError(RuntimeError):
+    """The claims file lock could not be acquired before the timeout."""
+
+
+def _lock_timeout(timeout: float) -> float:
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lock_timeout must be a positive number of seconds") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("lock_timeout must be a positive number of seconds")
+    return value
+
+
+@contextlib.contextmanager
+def _interprocess_claims_lock(claims_path: Path, timeout: float = DEFAULT_LOCK_TIMEOUT):
+    """Exclusive flock/msvcrt lock for ``claims_path``.
+
+    Mirrors the circuit-breaker lock: a sibling lock file, non-blocking
+    acquire, short sleep, then give up. Timeout and I/O failures are logged
+    and raised so a caller cannot save a claim it did not lock.
+    """
+    timeout = _lock_timeout(timeout)
+    lock_path = claims_path.with_suffix(".lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error("Failed to create claims lock directory %s: %s", lock_path.parent, exc)
+        raise ClaimsLockError(f"Cannot create lock directory {lock_path.parent}") from exc
+
+    lock_fd = None
+    acquired = False
+    deadline = time.monotonic() + timeout
+    try:
+        try:
+            lock_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o666)
+        except OSError as exc:
+            logger.error("Failed to open claims lock %s: %s", lock_path, exc)
+            raise ClaimsLockError(f"Cannot open claims lock {lock_path}") from exc
+
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    # msvcrt.locking fails on an empty file: the locked byte is past EOF.
+                    if os.lseek(lock_fd, 0, os.SEEK_END) < 1:
+                        os.write(lock_fd, b"\0")
+                    os.lseek(lock_fd, 0, os.SEEK_SET)
+                    msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except (IOError, OSError):
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.02)
+
+        if not acquired:
+            logger.error("Timed out after %.2fs acquiring claims lock %s", timeout, lock_path)
+            raise ClaimsLockError(f"Timed out acquiring claims lock {lock_path} after {timeout:.2f}s")
+
+        try:
+            yield
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(lock_fd, 0, os.SEEK_SET)
+                    msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except (IOError, OSError) as exc:
+                logger.error("Failed to release claims lock %s: %s", lock_path, exc)
+    finally:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError as exc:
+                logger.error("Failed to close claims lock fd for %s: %s", lock_path, exc)
 
 
 def _default_claims_path() -> Path:
@@ -164,60 +255,88 @@ def claim(
     agent: Optional[str] = None,
     ttl_minutes: int = DEFAULT_TTL_MINUTES,
     claims_path: Optional[Path] = None,
+    lock_timeout: float = DEFAULT_LOCK_TIMEOUT,
 ) -> tuple[dict, list[dict]]:
     """Register a claim. Returns (this claim, list of conflicting active claims)."""
-    claims_path = claims_path or _default_claims_path()
+    if not isinstance(task, str) or not task.strip():
+        raise ValueError("task must be a non-empty string")
+    task = task.strip()
+    claims_path = Path(claims_path) if claims_path is not None else _default_claims_path()
     project = project or _git_root(Path.cwd()) or Path.cwd().name
     explicit_agent = _is_explicit_agent(agent) or bool(os.environ.get("TRIAD_AGENT_NAME"))
     agent = agent or _git_author(Path.cwd())
-    touching = [t.strip() for t in (touching or []) if t.strip()]
+    if touching is not None and not isinstance(touching, (list, tuple)):
+        raise ValueError("touching must be a list of path strings")
+    touching = [t.strip() for t in (touching or []) if isinstance(t, str) and t.strip()]
     # Clamp to a sane range: an unclamped huge TTL (e.g. from a typo'd
     # exponent) can overflow timedelta() in every later claim()/status()
     # call, permanently poisoning the shared claims file.
-    ttl_minutes = max(1, min(int(ttl_minutes), 10080))
+    try:
+        ttl_minutes = max(1, min(int(ttl_minutes), 10080))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ttl_minutes must be an integer") from exc
+    lock_timeout = _lock_timeout(lock_timeout)
 
-    data = _load(claims_path)
-    data = _prune_stale(data)
+    with _interprocess_claims_lock(claims_path, timeout=lock_timeout):
+        data = _load(claims_path)
+        data = _prune_stale(data)
 
-    conflicts = []
-    for existing in data.values():
-        if existing.get("project") != project:
-            continue
-        # Only treat "same agent name" as "same agent" when the CALLER's
-        # identity was explicit (we don't know whether the stored claim's
-        # name was explicit too, since that isn't recorded). This means a
-        # stored fallback-name claim can be skipped by an explicit caller
-        # who happens to share that name -- an accepted edge case, not
-        # a guarantee that both sides were explicit.
-        if existing.get("agent") == agent and explicit_agent:
-            continue
-        existing_touches = set(existing.get("touching", []))
-        if touching and existing_touches and _real_overlap(set(touching), existing_touches):
-            conflicts.append(existing)
+        conflicts = []
+        for existing in data.values():
+            if existing.get("project") != project:
+                continue
+            # Only treat "same agent name" as "same agent" when the CALLER's
+            # identity was explicit (we don't know whether the stored claim's
+            # name was explicit too, since that isn't recorded). This means a
+            # stored fallback-name claim can be skipped by an explicit caller
+            # who happens to share that name -- an accepted edge case, not
+            # a guarantee that both sides were explicit.
+            if existing.get("agent") == agent and explicit_agent:
+                continue
+            existing_touches = set(existing.get("touching", []))
+            if touching and existing_touches and _real_overlap(set(touching), existing_touches):
+                conflicts.append(existing)
 
-    claim_id = uuid.uuid4().hex[:12]
-    entry = {
-        "id": claim_id,
-        "agent": agent,
-        "project": project,
-        "task": task,
-        "touching": touching,
-        "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "ttl_minutes": ttl_minutes,
-        "status": "in_progress",
-    }
-    data[claim_id] = entry
-    _save(claims_path, data)
+        claim_id = uuid.uuid4().hex[:12]
+        entry = {
+            "id": claim_id,
+            "agent": agent,
+            "project": project,
+            "task": task,
+            "touching": touching,
+            "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "ttl_minutes": ttl_minutes,
+            "status": "in_progress",
+        }
+        data[claim_id] = entry
+        try:
+            _save(claims_path, data)
+        except OSError as exc:
+            logger.error("Failed to save claims file %s: %s", claims_path, exc)
+            raise
     return entry, conflicts
 
 
-def release(claim_id: str, claims_path: Optional[Path] = None) -> bool:
-    claims_path = claims_path or _default_claims_path()
-    data = _load(claims_path)
-    if claim_id not in data:
-        return False
-    del data[claim_id]
-    _save(claims_path, data)
+def release(
+    claim_id: str,
+    claims_path: Optional[Path] = None,
+    lock_timeout: float = DEFAULT_LOCK_TIMEOUT,
+) -> bool:
+    if not isinstance(claim_id, str) or not claim_id.strip():
+        raise ValueError("claim_id must be a non-empty string")
+    claim_id = claim_id.strip()
+    claims_path = Path(claims_path) if claims_path is not None else _default_claims_path()
+    lock_timeout = _lock_timeout(lock_timeout)
+    with _interprocess_claims_lock(claims_path, timeout=lock_timeout):
+        data = _load(claims_path)
+        if claim_id not in data:
+            return False
+        del data[claim_id]
+        try:
+            _save(claims_path, data)
+        except OSError as exc:
+            logger.error("Failed to save claims file %s: %s", claims_path, exc)
+            raise
     return True
 
 
@@ -251,13 +370,22 @@ def format_claim(c: dict) -> str:
 
 
 def _cmd_claim(args: argparse.Namespace) -> int:
-    entry, conflicts = claim(
-        task=args.task,
-        touching=args.touching.split(",") if args.touching else [],
-        project=args.project,
-        agent=args.agent,
-        ttl_minutes=args.ttl,
-    )
+    try:
+        entry, conflicts = claim(
+            task=args.task,
+            touching=args.touching.split(",") if args.touching else [],
+            project=args.project,
+            agent=args.agent,
+            ttl_minutes=args.ttl,
+        )
+    except ClaimsLockError as exc:
+        logger.error("Claims lock failed: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        logger.error("Invalid claim: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     if conflicts:
         print("WARNING: possible collision with active claim(s):\n")
         for c in conflicts:
@@ -277,7 +405,16 @@ def _cmd_claim(args: argparse.Namespace) -> int:
 
 
 def _cmd_release(args: argparse.Namespace) -> int:
-    ok = release(args.claim_id)
+    try:
+        ok = release(args.claim_id)
+    except ClaimsLockError as exc:
+        logger.error("Claims lock failed: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        logger.error("Invalid release: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     print("Released." if ok else f"No claim found with id {args.claim_id}")
     return 0 if ok else 1
 

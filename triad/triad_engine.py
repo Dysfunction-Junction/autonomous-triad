@@ -867,14 +867,9 @@ if [ "$BACKUP_ACTIVE" = "1" ]; then
             echo "❌ [Triad Hook Error] Legacy pre-commit hook '$OWNED_BACKUP' is a dangling symlink." >&2
             exit 1
         fi
-        IS_HUSKY=0
-        if [ "$(basename "$HOOK_DIR")" = ".husky" ] || [ -f "$HOOK_DIR/../.husky/_/h" ] || [ -d "$HOOK_DIR/../.husky" ]; then
-            IS_HUSKY=1
-        fi
-        if [ ! -x "$legacy_hook" ] && [ "$IS_HUSKY" -ne 1 ]; then
-            echo "❌ [Triad Hook Error] Legacy pre-commit hook '$OWNED_BACKUP' is not executable." >&2
-            exit 1
-        fi
+        # A missing executable bit must not skip the legacy hook. Git may
+        # store it as 0644, and this wrapper invokes the shebang interpreter
+        # explicitly, which does not require +x on the script itself.
         if grep -q "Triad Autonomous Pre-Commit Gate Hook" "$legacy_hook" 2>/dev/null; then
             echo "❌ [Triad Hook Error] Circular legacy hook execution detected in '$OWNED_BACKUP'." >&2
             exit 1
@@ -1108,7 +1103,28 @@ if [ "$BACKUP_ACTIVE" = "1" ]; then
         _interp_base_lower=$(printf '%s\\n' "$_interp_base" | tr '[:upper:]' '[:lower:]')
 
         case "$_interp_base_lower" in
-            sh|bash|zsh|dash|ash|ksh)
+            bash|zsh|ksh)
+                # Own child process. Pass the script file to its shebang
+                # interpreter so bash arrays, [[ ]], and exec run there and
+                # not inside this #!/bin/sh (dash) wrapper. `exec` in the
+                # legacy hook replaces only that child; $? still propagates.
+                _cmd="${{_INTERP_BIN:-bash}}"
+                set -- "$@" "$_cmd"
+                _fidx=1
+                while [ $_fidx -le $_FLAG_COUNT ]; do
+                    case $_fidx in
+                        1) set -- "$@" "$_FLAG_1" ;; 2) set -- "$@" "$_FLAG_2" ;; 3) set -- "$@" "$_FLAG_3" ;; 4) set -- "$@" "$_FLAG_4" ;;
+                        5) set -- "$@" "$_FLAG_5" ;; 6) set -- "$@" "$_FLAG_6" ;; 7) set -- "$@" "$_FLAG_7" ;; 8) set -- "$@" "$_FLAG_8" ;;
+                        9) set -- "$@" "$_FLAG_9" ;; 10) set -- "$@" "$_FLAG_10" ;; 11) set -- "$@" "$_FLAG_11" ;; 12) set -- "$@" "$_FLAG_12" ;;
+                        13) set -- "$@" "$_FLAG_13" ;; 14) set -- "$@" "$_FLAG_14" ;; 15) set -- "$@" "$_FLAG_15" ;; 16) set -- "$@" "$_FLAG_16" ;;
+                    esac
+                    _fidx=$((_fidx + 1))
+                done
+                set -- "$@" "$legacy_hook"
+                ;;
+            sh|dash|ash)
+                # POSIX sh stays a child too. Source it with $0 set to the
+                # pre-commit path so basename "$0" checks keep working.
                 _cmd="${{_INTERP_BIN:-sh}}"
                 set -- "$@" "$_cmd"
                 _fidx=1
@@ -1256,18 +1272,33 @@ def resolve_target_hook_file(repo_root: Union[str, Path], hook_name: str = "pre-
     return primary_hook
 
 
+def _shebang_interpreter_name(first_line: str) -> str:
+    """Return the interpreter basename from a shebang, or ''."""
+    if not first_line.startswith("#!"):
+        return ""
+    match = re.search(r"^#!\s*(?:[^\s]*/env(?:\s+-\S+)*\s+)?([^\s]+)", first_line)
+    if not match:
+        return ""
+    return Path(match.group(1)).name.lower()
+
+
+def _safe_to_inline_under_sh(first_line: str) -> bool:
+    """True when the body can be inlined into the ``#!/bin/sh`` wrapper.
+
+    bash, zsh, and ksh must be chained and executed as their own child so
+    their shebang is honored. Inlining them runs that syntax under dash when
+    Git invokes the hook with ``sh``.
+    """
+    return _shebang_interpreter_name(first_line) in {"sh", "dash", "ash"}
+
+
 def is_posix_shell_shebang(first_line: str) -> bool:
     """
     Check if the first line is a valid shebang for a POSIX-compatible shell.
     Strictly allowlists POSIX shells: sh, bash, zsh, dash, ash, ksh.
     Rejects fish, pwsh, python, node, perl, ruby, etc.
     """
-    if not first_line.startswith("#!"):
-        return False
-    m = re.search(r"^#!\s*(?:[^\s]*/env(?:\s+-\S+)*\s+)?([^\s]+)", first_line)
-    if not m:
-        return False
-    interp = Path(m.group(1)).name.lower()
+    interp = _shebang_interpreter_name(first_line)
     return interp in {"sh", "bash", "zsh", "dash", "ash", "ksh"}
 
 
