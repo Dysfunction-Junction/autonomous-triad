@@ -90,6 +90,11 @@ def bounded_run(
                     proc.kill()
         except (OSError, ValueError):
             return
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     threads = [
         threading.Thread(target=drain, args=(proc.stdout, "out"), daemon=True),

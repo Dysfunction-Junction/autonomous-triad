@@ -1,7 +1,7 @@
 # Repository tag index
 
 > Generated view — do not edit. Regenerate with `node scripts/repo-tags.mjs`.
-> Source: `git ls-files` · branch `master` · commit `119bb45` · 97 tracked files.
+> Source: `git ls-files` · branch `master` · commit `d224e92` · 97 tracked files.
 >
 > `Tags/Links/Queries` is the header written at the top of each file. This file is the map;
 > the headers are the body. Both move together in the same commit.
