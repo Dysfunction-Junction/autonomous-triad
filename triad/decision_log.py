@@ -25,9 +25,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterator
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -71,21 +74,26 @@ def _git_author(cwd: Optional[Path] = None) -> str:
     return "unknown-agent"
 
 
-def _last_block(log_path: Path, project: Optional[str]) -> Optional[dict]:
-    if not log_path.exists():
-        return None
-    last = None
-    with log_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
+def _read_blocks(log_path: Path) -> Iterator[dict]:
+    try:
+        log = log_path.open("rb")
+    except FileNotFoundError:
+        return
+    with log:
+        for line in log:
             try:
-                block = json.loads(line)
-            except json.JSONDecodeError:
+                block = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            if project is None or block.get("project") == project:
-                last = block
+            if isinstance(block, dict):
+                yield block
+
+
+def _last_block(log_path: Path, project: Optional[str]) -> Optional[dict]:
+    last = None
+    for block in _read_blocks(log_path):
+        if isinstance(block.get("id"), str) and (project is None or block.get("project") == project):
+            last = block
     return last
 
 
@@ -93,24 +101,7 @@ def get_block(block_id: str, log_path: Optional[Path] = None) -> Optional[dict]:
     """Direct id lookup -- unlike query_blocks(), not subject to `limit`
     truncation, so it finds a block regardless of how old it is."""
     log_path = log_path or _default_log_path()
-    if not log_path.exists():
-        return None
-    with log_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                block = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if block.get("id") == block_id:
-                return block
-    return None
-
-
-def _block_exists(log_path: Path, block_id: str) -> bool:
-    return get_block(block_id, log_path=log_path) is not None
+    return next((block for block in _read_blocks(log_path) if block.get("id") == block_id), None)
 
 
 def add_block(
@@ -149,43 +140,98 @@ def add_block(
     if status not in BLOCK_STATUSES:
         raise ValueError(f"status must be one of {BLOCK_STATUSES}, got: {status!r}")
 
-    log_path = log_path or _default_log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    cwd = Path.cwd()
-    project = project or _git_root(cwd) or cwd.name
-    parent = _last_block(log_path, project)
-
-    if supersedes and not _block_exists(log_path, supersedes):
-        raise ValueError(f"--supersedes references unknown block id: {supersedes}")
-
     actions = list(actions or [])
     if commit:
         actions.append({"type": "commit", "sha": commit})
     if redirect_to or redirect_claim:
         actions.append({"type": "redirect", "to_agent": redirect_to, "their_claim": redirect_claim})
 
-    block = {
-        "id": uuid.uuid4().hex[:12],
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "agent": agent or _git_author(cwd),
-        "project": project,
-        "parent": parent["id"] if parent else None,
-        "trace_id": trace_id or uuid.uuid4().hex[:12],
-        "status": status,
-        "intent": intent,
-        "reasoning": reasoning,
-        "actions": actions,
-        "verification": verification,
-        "touches": touches or [],
-        "supersedes": supersedes,
-    }
+    return _append_block(
+        log_path or _default_log_path(), intent, reasoning, status,
+        project=project, agent=agent, trace_id=trace_id, supersedes=supersedes,
+        actions=actions, verification=verification, touches=touches,
+    )
 
-    # Create atomically with restrictive mode (POSIX) rather than write-then-chmod,
-    # which leaves a window where the file exists with default permissions.
-    fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-    with os.fdopen(fd, "a", encoding="utf-8") as f:
-        f.write(json.dumps(block, ensure_ascii=False) + "\n")
+
+def _append_block(
+    log_path: Path,
+    intent: str,
+    reasoning: str,
+    status: str,
+    *,
+    project: Optional[str] = None,
+    agent: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    supersedes: Optional[str] = None,
+    actions: Optional[list[dict]] = None,
+    verification: Optional[str] = None,
+    touches: Optional[list[str]] = None,
+    resolving: bool = False,
+) -> dict:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    cwd = Path.cwd()
+    agent = agent or _git_author(cwd)
+    fallback_project = project or _git_root(cwd) or cwd.name
+
+    # Keep this sidecar and transaction in sync with Foundry's appendBlock.
+    with closing(sqlite3.connect(f"{log_path}.lock.sqlite", timeout=5, isolation_level=None)) as lock:
+        lock.execute("BEGIN IMMEDIATE")
+        if supersedes is not None:
+            target = get_block(supersedes, log_path=log_path) if supersedes else None
+            if target is None:
+                if resolving:
+                    raise ValueError(f"unknown block id: {supersedes}")
+                raise ValueError(f"--supersedes references unknown block id: {supersedes}")
+            if target.get("status") not in (None, "proposed"):
+                raise ValueError(f"block {supersedes} is already resolved as {target.get('status')!r}")
+            already = next(
+                (block for block in _read_blocks(log_path) if block.get("supersedes") == supersedes),
+                None,
+            )
+            if already is not None:
+                raise ValueError(f"block {supersedes} was already resolved by [{already['id']}]")
+            if resolving:
+                project = project or target.get("project")
+                trace_id = target.get("trace_id")
+
+        project = project or fallback_project
+        parent = _last_block(log_path, project)
+
+        block = {
+            "id": uuid.uuid4().hex[:12],
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "agent": agent,
+            "project": project,
+            "parent": parent["id"] if parent else None,
+            "trace_id": trace_id or uuid.uuid4().hex[:12],
+            "status": status,
+            "intent": intent,
+            "reasoning": reasoning,
+            "actions": actions or [],
+            "verification": verification,
+            "touches": touches or [],
+            "supersedes": supersedes,
+        }
+
+        # Create with restrictive POSIX permissions and use binary append mode for literal LF bytes.
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        fd = os.open(log_path, flags, 0o600)
+        with os.fdopen(fd, "a+b", buffering=0) as log:
+            separator = b""
+            if log.seek(0, os.SEEK_END):
+                log.seek(-1, os.SEEK_END)
+                last_byte = log.read(1)
+                if not last_byte:
+                    raise OSError("Could not read the last byte of the ledger")
+                if last_byte != b"\n":
+                    separator = b"\n"
+
+            line = separator + json.dumps(block, ensure_ascii=False).encode("utf-8") + b"\n"
+            if log.write(line) != len(line):
+                raise OSError("Incomplete ledger write")
+            log.flush()
+            os.fsync(log.fileno())
+        lock.execute("COMMIT")
 
     return block
 
@@ -208,27 +254,14 @@ def resolve_block(
     if status not in BLOCK_STATUSES or status == "proposed":
         raise ValueError(f"status must be one of {[s for s in BLOCK_STATUSES if s != 'proposed']}, got: {status!r}")
 
-    log_path = log_path or _default_log_path()
-    target = get_block(block_id, log_path=log_path)
-    if target is None:
-        raise ValueError(f"unknown block id: {block_id}")
-    if target.get("status") not in (None, "proposed"):
-        raise ValueError(f"block {block_id} is already resolved as {target.get('status')!r}")
-    already = next(
-        (b for b in query_blocks(log_path=log_path, limit=10**9) if b.get("supersedes") == block_id),
-        None,
-    )
-    if already is not None:
-        raise ValueError(f"block {block_id} was already resolved by [{already['id']}]")
-
-    return add_block(
+    return _append_block(
+        log_path or _default_log_path(),
         intent=f"resolve {block_id} as {status}",
         reasoning=outcome or f"marked {status}, no further detail given",
         supersedes=block_id,
-        project=project or target.get("project"),
-        trace_id=target.get("trace_id"),
+        project=project,
         status=status,
-        log_path=log_path,
+        resolving=True,
     )
 
 
@@ -242,30 +275,19 @@ def query_blocks(
     limit: int = 20,
 ) -> list[dict]:
     log_path = log_path or _default_log_path()
-    if not log_path.exists():
-        return []
-
     results = []
-    with log_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                block = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if project and block.get("project") != project:
-                continue
-            if touches and not any(touches in t for t in block.get("touches", [])):
-                continue
-            if since and block.get("ts", "") < since:
-                continue
-            if trace_id and block.get("trace_id") != trace_id:
-                continue
-            if status and block.get("status") != status:
-                continue
-            results.append(block)
+    for block in _read_blocks(log_path):
+        if project and block.get("project") != project:
+            continue
+        if touches and not any(touches in t for t in block.get("touches", [])):
+            continue
+        if since and block.get("ts", "") < since:
+            continue
+        if trace_id and block.get("trace_id") != trace_id:
+            continue
+        if status and block.get("status") != status:
+            continue
+        results.append(block)
 
     return results[-limit:]
 
