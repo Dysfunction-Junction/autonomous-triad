@@ -104,10 +104,6 @@ def get_block(block_id: str, log_path: Optional[Path] = None) -> Optional[dict]:
     return next((block for block in _read_blocks(log_path) if block.get("id") == block_id), None)
 
 
-def _block_exists(log_path: Path, block_id: str) -> bool:
-    return get_block(block_id, log_path=log_path) is not None
-
-
 def add_block(
     intent: str,
     reasoning: str,
@@ -144,24 +140,62 @@ def add_block(
     if status not in BLOCK_STATUSES:
         raise ValueError(f"status must be one of {BLOCK_STATUSES}, got: {status!r}")
 
-    log_path = log_path or _default_log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    cwd = Path.cwd()
-    project = project or _git_root(cwd) or cwd.name
-    agent = agent or _git_author(cwd)
     actions = list(actions or [])
     if commit:
         actions.append({"type": "commit", "sha": commit})
     if redirect_to or redirect_claim:
         actions.append({"type": "redirect", "to_agent": redirect_to, "their_claim": redirect_claim})
 
+    return _append_block(
+        log_path or _default_log_path(), intent, reasoning, status,
+        project=project, agent=agent, trace_id=trace_id, supersedes=supersedes,
+        actions=actions, verification=verification, touches=touches,
+    )
+
+
+def _append_block(
+    log_path: Path,
+    intent: str,
+    reasoning: str,
+    status: str,
+    *,
+    project: Optional[str] = None,
+    agent: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    supersedes: Optional[str] = None,
+    actions: Optional[list[dict]] = None,
+    verification: Optional[str] = None,
+    touches: Optional[list[str]] = None,
+    resolving: bool = False,
+) -> dict:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    cwd = Path.cwd()
+    agent = agent or _git_author(cwd)
+    fallback_project = project or _git_root(cwd) or cwd.name
+
     # Keep this sidecar and transaction in sync with Foundry's appendBlock.
     with closing(sqlite3.connect(f"{log_path}.lock.sqlite", timeout=5, isolation_level=None)) as lock:
         lock.execute("BEGIN IMMEDIATE")
+        if supersedes is not None:
+            target = get_block(supersedes, log_path=log_path) if supersedes else None
+            if target is None:
+                if resolving:
+                    raise ValueError(f"unknown block id: {supersedes}")
+                raise ValueError(f"--supersedes references unknown block id: {supersedes}")
+            if target.get("status") not in (None, "proposed"):
+                raise ValueError(f"block {supersedes} is already resolved as {target.get('status')!r}")
+            already = next(
+                (block for block in _read_blocks(log_path) if block.get("supersedes") == supersedes),
+                None,
+            )
+            if already is not None:
+                raise ValueError(f"block {supersedes} was already resolved by [{already['id']}]")
+            if resolving:
+                project = project or target.get("project")
+                trace_id = target.get("trace_id")
+
+        project = project or fallback_project
         parent = _last_block(log_path, project)
-        if supersedes and not _block_exists(log_path, supersedes):
-            raise ValueError(f"--supersedes references unknown block id: {supersedes}")
 
         block = {
             "id": uuid.uuid4().hex[:12],
@@ -173,14 +207,15 @@ def add_block(
             "status": status,
             "intent": intent,
             "reasoning": reasoning,
-            "actions": actions,
+            "actions": actions or [],
             "verification": verification,
             "touches": touches or [],
             "supersedes": supersedes,
         }
 
         # Create with restrictive POSIX permissions and use binary append mode for literal LF bytes.
-        fd = os.open(log_path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        fd = os.open(log_path, flags, 0o600)
         with os.fdopen(fd, "a+b", buffering=0) as log:
             separator = b""
             if log.seek(0, os.SEEK_END):
@@ -219,27 +254,14 @@ def resolve_block(
     if status not in BLOCK_STATUSES or status == "proposed":
         raise ValueError(f"status must be one of {[s for s in BLOCK_STATUSES if s != 'proposed']}, got: {status!r}")
 
-    log_path = log_path or _default_log_path()
-    target = get_block(block_id, log_path=log_path)
-    if target is None:
-        raise ValueError(f"unknown block id: {block_id}")
-    if target.get("status") not in (None, "proposed"):
-        raise ValueError(f"block {block_id} is already resolved as {target.get('status')!r}")
-    already = next(
-        (b for b in query_blocks(log_path=log_path, limit=10**9) if b.get("supersedes") == block_id),
-        None,
-    )
-    if already is not None:
-        raise ValueError(f"block {block_id} was already resolved by [{already['id']}]")
-
-    return add_block(
+    return _append_block(
+        log_path or _default_log_path(),
         intent=f"resolve {block_id} as {status}",
         reasoning=outcome or f"marked {status}, no further detail given",
         supersedes=block_id,
-        project=project or target.get("project"),
-        trace_id=target.get("trace_id"),
+        project=project,
         status=status,
-        log_path=log_path,
+        resolving=True,
     )
 
 
