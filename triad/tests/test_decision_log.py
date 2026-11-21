@@ -1,12 +1,15 @@
 """Regression tests for the shared SQLite decision-ledger writer lock."""
 
 import sqlite3
+from pathlib import Path
 import subprocess
 import sys
 import time
 from contextlib import ExitStack, closing
 
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 from triad.decision_log import add_block, query_blocks, resolve_block
 
@@ -111,7 +114,7 @@ sqlite3.connect = report_lock_attempt
         try:
             for marker in markers:
                 cmd = [sys.executable, "-B", "-c", worker_setup + script, str(path), str(marker), str(argument)]
-                writers.append(stack.enter_context(subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)))
+                writers.append(stack.enter_context(subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, cwd=REPO_ROOT)))
 
             deadline = time.monotonic() + 4
             while not all(marker.exists() for marker in markers):
