@@ -308,4 +308,3 @@ def test_backfill_drains_each_registered_repo_before_exit(repo, tmp_path, monkey
     for root in (repo, second):
         result = original(root, state).status(check_fresh=True)
         assert result["fresh"] and result["pending"] == 0
-

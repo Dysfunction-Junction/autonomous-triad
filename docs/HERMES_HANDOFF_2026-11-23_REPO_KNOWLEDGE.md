@@ -53,3 +53,12 @@ No Exocortex daemon restart. No Foundry/Bear House source edits. Existing untrac
 CLAUDE.md files and mobile LivingBrain edits were left alone. Exocortex main has an
 unrelated local commit and is behind origin; do not push that history for this task.
 
+
+## Publication receipts
+Implementation pushed to Triad master as 0db760a; formatting/final-plan follow-up
+retains identical executable behavior (29 focused cases pass after normalization).
+Exocortex docs pushed as a clean fast-forward to remote main, adefa2b, containing
+only the six documentation/tag-index files. The existing push secret guard passed
+the one-commit range; the failed new-branch attempt scanned old history and did not
+publish it. Local canonical Exocortex main remains divergent with its preexisting
+app work intact. Decision ledger: 5fae7e3d06e5.

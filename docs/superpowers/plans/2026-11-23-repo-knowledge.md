@@ -17,7 +17,7 @@ Stale/deleted vectors, filename and content secrets, concurrent writers, source 
 - [x] Implement triad/repo_index.py sync/search/status/watch CLI, bounded embeddings, truthful failures.
 - [x] Add scripts/setup-repo-knowledge.ps1 and docs/REPO_KNOWLEDGE.md; install local command wrappers and hidden logon watcher.
 - [x] Verify full repository suite/lint/security, actual nomic retrieval and automatic lifecycle updates; obtain Triad diff review.
-- [ ] Update shared AGENTS.md, ecosystem checklists/diagram, dated handoff and shared memory; commit and push only owned files.
+- [x] Update shared AGENTS.md, ecosystem checklists/diagram, dated handoff and shared memory; commit and push only owned files.
 
 Ruling: work in canonical checkout with new scoped files; only preexisting untracked CLAUDE.md is unrelated and will not be staged. Do not create another competing runtime checkout.
 

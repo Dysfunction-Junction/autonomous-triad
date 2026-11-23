@@ -59,5 +59,3 @@ if (-not $NoTask) {
 }
 Write-Output "Ready: $binDir\repo-knowledge.cmd"
 Write-Output "Configuration: $configPath"
-
-

@@ -42,4 +42,3 @@
 Reuse current tags and local nomic runtime; use disposable per-checkout SQLite
 indexes for code retrieval. Add Cartograph as a static navigation companion.
 No new paid service, heavyweight database daemon, or experimental memory replacement.
-

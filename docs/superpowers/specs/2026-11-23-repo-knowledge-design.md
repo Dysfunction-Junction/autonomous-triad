@@ -17,4 +17,3 @@ Sync replaces changed file chunks transactionally, removes deleted/excluded entr
 
 ## Acceptance
 Regression coverage: incremental no-op/edit/rename/delete; repo isolation; secret/symlink/ignore filters; embedding failure/retry; provider/model change; corrupt vectors; stale-read suppression. Live real-code queries and create/edit/delete smoke test must pass with actual nomic. Watcher must demonstrate fresh indexing without an explicit sync; scheduled task and status must be checked.
-

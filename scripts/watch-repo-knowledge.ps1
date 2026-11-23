@@ -10,4 +10,3 @@ $indexScript = Join-Path $PSScriptRoot '..\triad\repo_index.py'
 & (Join-Path $PSScriptRoot 'start-repo-embedding.ps1')
 & $config.python_path $indexScript watch --state-dir $stateDir --config $configPath --interval 15
 exit $LASTEXITCODE
-
