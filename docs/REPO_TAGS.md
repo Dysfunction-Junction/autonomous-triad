@@ -1,12 +1,12 @@
 # Repository tag index
 
 > Generated view — do not edit. Regenerate with `node scripts/repo-tags.mjs`.
-> Source: `git ls-files` · branch `cursor/claims-hook-readme-sync-0a63` · commit `180d699` · 99 tracked files.
+> Source: `git ls-files` · branch `master` · commit `c3629db` · 112 tracked files.
 >
 > `Tags/Links/Queries` is the header written at the top of each file. This file is the map;
 > the headers are the body. Both move together in the same commit.
 
-**Coverage:** 97 / 99 files carry a tag header (98.0%). 2 untagged.
+**Coverage:** 106 / 112 files carry a tag header (94.6%). 6 untagged.
 
 ## How to read this
 
@@ -34,8 +34,12 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `bin/triad` | `cli`<br>`engine`<br>`ops-runbook` | `triad/triad_engine.py`<br>`triad/paths.py` |
 | `bin/triad.cmd` | `cli`<br>`engine`<br>`ops-runbook` | `bin/triad.ps1`<br>`bin/triad` |
 | `bin/triad.ps1` | `cli`<br>`engine`<br>`ops-runbook` | `triad/triad_engine.py`<br>`triad/paths.py` |
+| `docs/2026-11-23_REPO_KNOWLEDGE_RESEARCH.md` | `tooling`<br>`local-llm`<br>`ops-runbook` | `docs/REPO_KNOWLEDGE.md`<br>`scripts/repo-tags.mjs` |
 | `docs/ARCHITECTURE.md` | `engine`<br>`advisor`<br>`protocol-contract`<br>`review` | `triad/triad_engine.py`<br>`triad/server.py`<br>`docs/BLUEPRINT.md` |
 | `docs/BLUEPRINT.md` | `advisor`<br>`review`<br>`failover`<br>`cost` | `docs/ARCHITECTURE.md`<br>`triad/competition.py`<br>`triad/circuit.py` |
+| `docs/HERMES_HANDOFF_2026-11-23_REPO_KNOWLEDGE.md` | `tooling`<br>`local-llm`<br>`ops-runbook` | `docs/REPO_KNOWLEDGE.md`<br>`docs/2026-11-23_REPO_KNOWLEDGE_RESEARCH.md`<br>`triad/repo_index.py` |
+| `docs/REPO_KNOWLEDGE.md` | `tooling`<br>`local-llm`<br>`ops-runbook` | `triad/repo_index.py`<br>`scripts/setup-repo-knowledge.ps1`<br>`docs/2026-11-23_REPO_KNOWLEDGE_RESEARCH.md` |
+| `docs/superpowers/specs/2026-11-23-repo-knowledge-design.md` | `tooling`<br>`local-llm`<br>`ops-runbook` | `triad/repo_index.py`<br>`scripts/setup-repo-knowledge.ps1`<br>`docs/REPO_KNOWLEDGE.md` |
 | `docs/TRIAD_UPGRADE_SPEC.md` | `engine`<br>`review`<br>`triage`<br>`cost`<br>`verification` | `docs/TRIAD_V34_UNIFICATION_SPEC.md`<br>`triad/cli/review.py` |
 | `docs/TRIAD_V34_MERGE_MAP.md` | `sync`<br>`verification`<br>`protocol-contract` | `scripts/triad_unify_audit.py`<br>`docs/TRIAD_V34_UNIFICATION_SPEC.md` |
 | `docs/TRIAD_V34_UNIFICATION_SPEC.md` | `sync`<br>`engine`<br>`verification`<br>`review` | `docs/TRIAD_UPGRADE_SPEC.md`<br>`scripts/triad_unify_audit.py`<br>`docs/TRIAD_V34_MERGE_MAP.md` |
@@ -50,8 +54,11 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `scripts/install.ps1` | `cli`<br>`tooling`<br>`ops-runbook` | `bin/triad.ps1`<br>`triad/sync_manager.py` |
 | `scripts/prepare_bench_env.py` | `bench`<br>`docker`<br>`tooling` | `triad/bench/docker_harness.py`<br>`triad/bench/swebench_runner.py` |
 | `scripts/repo-tags.mjs` | `tooling`<br>`verification`<br>`protocol-contract` | `docs/TAG_VOCABULARY.md`<br>`docs/REPO_TAGS.md`<br>`.github/workflows/ci.yml` |
+| `scripts/setup-repo-knowledge.ps1` | `tooling`<br>`local-llm`<br>`ops-runbook` | `scripts/watch-repo-knowledge.ps1`<br>`docs/REPO_KNOWLEDGE.md` |
+| `scripts/start-repo-embedding.ps1` | `tooling`<br>`local-llm`<br>`ops-runbook` | `scripts/watch-repo-knowledge.ps1`<br>`docs/REPO_KNOWLEDGE.md` |
 | `scripts/triad_unify_audit.py` | `sync`<br>`verification`<br>`tooling` | `docs/TRIAD_V34_MERGE_MAP.md`<br>`triad/sync_manager.py` |
 | `scripts/verify.ps1` | `verification`<br>`tooling`<br>`ops-runbook` | `scripts/install.ps1`<br>`triad/cli/doctor.py` |
+| `scripts/watch-repo-knowledge.ps1` | `tooling`<br>`local-llm`<br>`ops-runbook` | `triad/repo_index.py`<br>`scripts/start-repo-embedding.ps1` |
 | `skills/claude-advisor/advisor.py` | `skills`<br>`advisor`<br>`failover`<br>`cost` | `triad/advisor_manager.py`<br>`triad/competition.py`<br>`skills/claude-advisor/SKILL.md` |
 | `skills/claude-advisor/SKILL.md` | `skills`<br>`advisor`<br>`ops-runbook` | `skills/claude-advisor/advisor.py` |
 | `triad/__init__.py` | `engine`<br>`protocol-contract` | `triad/triad_engine.py`<br>`pyproject.toml` |
@@ -90,6 +97,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/procutil.py` | `ops-runbook`<br>`protocol-contract` | `triad/advisor_manager.py`<br>`triad/server.py` |
 | `triad/prompt_rewriter.py` | `intent`<br>`review` | `triad/intent_engine.py`<br>`triad/prw.py` |
 | `triad/prw.py` | `intent`<br>`cli` | `triad/prompt_rewriter.py` |
+| `triad/repo_index.py` | `tooling`<br>`local-llm`<br>`cache` | `docs/REPO_KNOWLEDGE.md`<br>`scripts/setup-repo-knowledge.ps1` |
 | `triad/response_cache.py` | `cache`<br>`cost` | `triad/advisor_manager.py`<br>`triad/cli/doctor.py` |
 | `triad/server.py` | `server`<br>`protocol-contract`<br>`advisor` | `triad/triad_engine.py`<br>`triad/intent_engine.py`<br>`AGENTS.md` |
 | `triad/sync_manager.py` | `sync`<br>`ops-runbook` | `triad/paths.py`<br>`triad/cli/sync.py` |
@@ -112,6 +120,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `triad/tests/test_notifier.py` | `notify`<br>`test-fixture` | `triad/notifier.py` |
 | `triad/tests/test_nous_bridge.py` | `nous`<br>`test-fixture` | `triad/nous_bridge.py` |
 | `triad/tests/test_prompt_rewriter.py` | `intent`<br>`review`<br>`test-fixture` | `triad/prompt_rewriter.py` |
+| `triad/tests/test_repo_index.py` | `tooling`<br>`local-llm`<br>`test-fixture` | `triad/repo_index.py` |
 | `triad/tests/test_response_cache.py` | `cache`<br>`test-fixture` | `triad/response_cache.py` |
 | `triad/tests/test_server.py` | `server`<br>`protocol-contract`<br>`test-fixture` | `triad/server.py` |
 | `triad/tests/test_sync_manager.py` | `sync`<br>`test-fixture` | `triad/sync_manager.py` |
@@ -131,7 +140,7 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `advisor` | 16 | [tags/advisor.md](tags/advisor.md) |
 | `agent` | 10 | [tags/agent.md](tags/agent.md) |
 | `bench` | 10 | [tags/bench.md](tags/bench.md) |
-| `cache` | 2 | [tags/cache.md](tags/cache.md) |
+| `cache` | 3 | [tags/cache.md](tags/cache.md) |
 | `claims` | 2 | [tags/claims.md](tags/claims.md) |
 | `cli` | 20 | [tags/cli.md](tags/cli.md) |
 | `cost` | 13 | [tags/cost.md](tags/cost.md) |
@@ -141,12 +150,12 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `failover` | 9 | [tags/failover.md](tags/failover.md) |
 | `intent` | 5 | [tags/intent.md](tags/intent.md) |
 | `ledger` | 1 | [tags/ledger.md](tags/ledger.md) |
-| `local-llm` | 3 | [tags/local-llm.md](tags/local-llm.md) |
+| `local-llm` | 12 | [tags/local-llm.md](tags/local-llm.md) |
 | `mcp` | 1 | [tags/mcp.md](tags/mcp.md) |
 | `morphogenetic` | 6 | [tags/morphogenetic.md](tags/morphogenetic.md) |
 | `notify` | 3 | [tags/notify.md](tags/notify.md) |
 | `nous` | 2 | [tags/nous.md](tags/nous.md) |
-| `ops-runbook` | 23 | [tags/ops-runbook.md](tags/ops-runbook.md) |
+| `ops-runbook` | 30 | [tags/ops-runbook.md](tags/ops-runbook.md) |
 | `patching` | 6 | [tags/patching.md](tags/patching.md) |
 | `protocol-contract` | 11 | [tags/protocol-contract.md](tags/protocol-contract.md) |
 | `review` | 14 | [tags/review.md](tags/review.md) |
@@ -154,8 +163,8 @@ flow downstream on the next `scripts/update-triad.ps1` sync, so tag here and nev
 | `server` | 2 | [tags/server.md](tags/server.md) |
 | `skills` | 2 | [tags/skills.md](tags/skills.md) |
 | `sync` | 9 | [tags/sync.md](tags/sync.md) |
-| `test-fixture` | 25 | [tags/test-fixture.md](tags/test-fixture.md) |
-| `tooling` | 9 | [tags/tooling.md](tags/tooling.md) |
+| `test-fixture` | 26 | [tags/test-fixture.md](tags/test-fixture.md) |
+| `tooling` | 18 | [tags/tooling.md](tags/tooling.md) |
 | `triage` | 3 | [tags/triage.md](tags/triage.md) |
 | `verification` | 26 | [tags/verification.md](tags/verification.md) |
 | `worktree` | 6 | [tags/worktree.md](tags/worktree.md) |
@@ -166,5 +175,8 @@ Untagged files per area, largest first. Tag the areas you actually query.
 
 | Area | Untagged files |
 | --- | --- |
+| `triad/tests` | 2 |
+| `docs` | 1 |
+| `triad/gc.py` | 1 |
+| `triad/metrics.py` | 1 |
 | `triad/protected_paths.txt` | 1 |
-| `triad/tests` | 1 |

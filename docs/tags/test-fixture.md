@@ -1,6 +1,6 @@
 # Tag: `test-fixture`
 
-[← index](../REPO_TAGS.md) · 25 files
+[← index](../REPO_TAGS.md) · 26 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -23,6 +23,7 @@
 | `triad/tests/test_notifier.py` | `triad/notifier.py` | `what payload is sent to the phone`<br>`how is a failed delivery handled` |
 | `triad/tests/test_nous_bridge.py` | `triad/nous_bridge.py` | `which cascade order is asserted`<br>`what happens on timeout` |
 | `triad/tests/test_prompt_rewriter.py` | `triad/prompt_rewriter.py` | `what does the rewriter add`<br>`are short prompts expanded` |
+| `triad/tests/test_repo_index.py` | `triad/repo_index.py` | `what verifies incremental repository indexing` |
 | `triad/tests/test_response_cache.py` | `triad/response_cache.py` | `how is a cache key shaped`<br>`how is python resolution handled` |
 | `triad/tests/test_server.py` | `triad/server.py` | `which routes are covered`<br>`how is the daemon started in tests` |
 | `triad/tests/test_sync_manager.py` | `triad/sync_manager.py` | `what does a sync produce`<br>`how are custom advisors preserved` |

@@ -1,6 +1,6 @@
 # Tag: `ops-runbook`
 
-[← index](../REPO_TAGS.md) · 23 files
+[← index](../REPO_TAGS.md) · 30 files
 
 | File | Links | Queries |
 | --- | --- | --- |
@@ -12,13 +12,20 @@
 | `bin/triad` | `triad/triad_engine.py`<br>`triad/paths.py` | `how does the sh launcher find python`<br>`where does it look for the repo root` |
 | `bin/triad.cmd` | `bin/triad.ps1`<br>`bin/triad` | `how does the batch launcher find the engine`<br>`what happens if TRIAD_ROOT is unset` |
 | `bin/triad.ps1` | `triad/triad_engine.py`<br>`triad/paths.py` | `how does the powershell launcher resolve the root`<br>`what is the search order` |
+| `docs/2026-11-23_REPO_KNOWLEDGE_RESEARCH.md` | `docs/REPO_KNOWLEDGE.md`<br>`scripts/repo-tags.mjs` | `why did we choose this repository indexing stack` |
+| `docs/HERMES_HANDOFF_2026-11-23_REPO_KNOWLEDGE.md` | `docs/REPO_KNOWLEDGE.md`<br>`docs/2026-11-23_REPO_KNOWLEDGE_RESEARCH.md`<br>`triad/repo_index.py` | `what is running for automatic repository indexing` |
+| `docs/REPO_KNOWLEDGE.md` | `triad/repo_index.py`<br>`scripts/setup-repo-knowledge.ps1`<br>`docs/2026-11-23_REPO_KNOWLEDGE_RESEARCH.md` | `how do I search code by meaning`<br>`how are tags and embeddings updated automatically` |
+| `docs/superpowers/specs/2026-11-23-repo-knowledge-design.md` | `triad/repo_index.py`<br>`scripts/setup-repo-knowledge.ps1`<br>`docs/REPO_KNOWLEDGE.md` | `how do repos stay tagged and embedded as I edit` |
 | `HERMES_HANDOFF_2026-10-02.md` | `triad/circuit.py`<br>`docs/ARCHITECTURE.md` | `what shipped in the circuit breaker and bench env work`<br>`which branch landed it` |
 | `HERMES_HANDOFF_2026-10-03.md` | `triad/paths.py`<br>`docs/ARCHITECTURE.md` | `what did the packaging and ctime merge change`<br>`was the suite green when it landed` |
 | `HERMES_HANDOFF_2026-10-27.md` | `triad/agent/router.py`<br>`triad/agent/runtime.py`<br>`docs/ARCHITECTURE.md` | `when did the agent stop using ollama`<br>`what does RouteLLM classify`<br>`which advisor signed off` |
 | `pyproject.toml` | `triad/triad_engine.py`<br>`bin/triad` | `which console scripts does the package install`<br>`what are the runtime dependencies` |
 | `README.md` | `triad/triad_engine.py`<br>`docs/ARCHITECTURE.md`<br>`bin/triad` | `what does the triad do`<br>`which commands does the CLI expose`<br>`how is zero incremental cost enforced` |
 | `scripts/install.ps1` | `bin/triad.ps1`<br>`triad/sync_manager.py` | `how do I install triad on Windows`<br>`where does install put the launchers` |
+| `scripts/setup-repo-knowledge.ps1` | `scripts/watch-repo-knowledge.ps1`<br>`docs/REPO_KNOWLEDGE.md` | `how do I install automatic local repository indexing` |
+| `scripts/start-repo-embedding.ps1` | `scripts/watch-repo-knowledge.ps1`<br>`docs/REPO_KNOWLEDGE.md` | `how is the local embedding runtime started` |
 | `scripts/verify.ps1` | `scripts/install.ps1`<br>`triad/cli/doctor.py` | `how do I check the install is healthy`<br>`what does verify run` |
+| `scripts/watch-repo-knowledge.ps1` | `triad/repo_index.py`<br>`scripts/start-repo-embedding.ps1` | `what runs automatic repository indexing at logon` |
 | `skills/claude-advisor/SKILL.md` | `skills/claude-advisor/advisor.py` | `how does an agent load the advisor skill`<br>`when should an agent consult an advisor` |
 | `triad/claims.py` | `triad/decision_log.py`<br>`AGENTS.md` | `who is touching which path right now`<br>`how do I claim paths before editing`<br>`how do I release a claim` |
 | `triad/cli/doctor.py` | `triad/circuit.py`<br>`triad/nous_bridge.py`<br>`scripts/verify.ps1` | `what does triad doctor check`<br>`how do I see projected cost`<br>`which advisors are unhealthy` |

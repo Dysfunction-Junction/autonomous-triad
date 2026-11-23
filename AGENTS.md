@@ -36,3 +36,12 @@ Mesh launch id `autonomous-triad`, port 8789, runner `python`, script `triad.ser
 | [`pyproject.toml`](pyproject.toml) | package metadata and tool entry points |
 
 This checkout is the canonical Triad source. `sovereign-exocortex/packages/triad` is a read-only vendor of one pinned commit of this tree. Edit Triad here. Update the vendor with `scripts/update-triad` in the exocortex repo. Do not edit the vendored copy in place. Device tasks live in the `hermes-api` checkout, not here.
+
+
+## Local semantic index
+
+Use the installed repo-knowledge command to register this checkout, retrieve
+task-specific code context, and sync/status after edits. See
+[REPO_KNOWLEDGE.md](docs/REPO_KNOWLEDGE.md) and the shared AGENTS.md section 7.
+Only a fresh status with zero pending embeddings proves indexing complete.
+Use repo-map.cmd with --static for local Cartograph dependency navigation.
